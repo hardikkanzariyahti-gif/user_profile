@@ -5,7 +5,7 @@ function App() {
   const [email, setEmail] = useState('');
   const [userId, setUserId] = useState('');
   const [user, setUser] = useState(null);
-  const [file, setFile] = useState(null); // ✅ for image
+  const [file, setFile] = useState(null);
 
   const API = "http://localhost:4000/api";
 
@@ -29,8 +29,10 @@ function App() {
         return;
       }
 
+      console.log("CREATED USER:", data);
+
       setUser(data);
-      setUserId(data.id);
+      setUserId(String(data.id)); // ✅ FORCE STRING
 
     } catch (err) {
       console.error(err);
@@ -42,14 +44,22 @@ function App() {
   // GET USER
   // =========================
   const getUser = async () => {
+    if (!userId) {
+      alert("Enter user ID");
+      return;
+    }
+
     try {
       const res = await fetch(`${API}/users/${userId}`);
-      const data = await res.json();
 
       if (!res.ok) {
         alert("User not found");
         return;
       }
+
+      const data = await res.json();
+
+      console.log("GET USER:", data);
 
       setUser(data);
 
@@ -60,7 +70,7 @@ function App() {
   };
 
   // =========================
-  // UPLOAD IMAGE (SAFE VERSION)
+  // UPLOAD IMAGE (SAFE + DEBUG)
   // =========================
   const uploadImage = async () => {
     if (!file || !userId) {
@@ -72,15 +82,30 @@ function App() {
       const formData = new FormData();
       formData.append("image", file);
 
-      const res = await fetch(`${API}/users/${userId}`, {
-        method: "PUT",
+      console.log("Uploading for ID:", userId);
+
+      const res = await fetch(`${API}/upload/${userId}`, {
+        method: "POST",
         body: formData
       });
 
-      const text = await res.text(); // ✅ prevents JSON crash
-      console.log("UPLOAD RESPONSE:", text);
+      let data;
 
-      alert("Upload API not ready yet (next step)");
+      try {
+        data = await res.json(); // ✅ SAFE JSON
+      } catch {
+        alert("Invalid server response");
+        return;
+      }
+
+      console.log("UPLOAD RESPONSE:", data);
+
+      if (!res.ok) {
+        alert(data.message || "Upload failed");
+        return;
+      }
+
+      alert(data.message);
 
     } catch (err) {
       console.error(err);
