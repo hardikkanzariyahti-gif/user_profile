@@ -6,7 +6,7 @@ const path = require('path');
 const fs = require('fs');
 
 const app = express();
-const PORT = 5000;
+const PORT = 4000;
 
 app.use(cors());
 app.use(express.json());
@@ -48,12 +48,17 @@ app.get('/', (req, res) => {
 // =========================
 // CREATE USER
 // =========================
-app.post('/api/users', async (req, res) => {
+app.post('/api/users', upload.single('profilePicture'), async (req, res) => {
   const { name, email } = req.body;
+
+  const userData = { name, email };
+  if (req.file) {
+    userData['profile picture'] = `http://localhost:${PORT}/uploads/${req.file.filename}`;
+  }
 
   const { data, error } = await supabase
     .from('users')
-    .insert([{ name, email }])
+    .insert([userData])
     .select();
 
   if (error) return res.status(500).json({ error });
