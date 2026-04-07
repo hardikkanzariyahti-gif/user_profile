@@ -3,7 +3,8 @@ import { useState } from 'react';
 function App() {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
-  const [userId, setUserId] = useState('');
+  const [lookupUserId, setLookupUserId] = useState('');
+  const [updateUserId, setUpdateUserId] = useState('');
   const [user, setUser] = useState(null);
   const [file, setFile] = useState(null);
 
@@ -32,7 +33,8 @@ function App() {
       console.log("CREATED USER:", data);
 
       setUser(data);
-      setUserId(String(data.id)); // ✅ FORCE STRING
+      setLookupUserId(String(data.id));
+      setUpdateUserId(String(data.id));
 
     } catch (err) {
       console.error(err);
@@ -44,13 +46,13 @@ function App() {
   // GET USER
   // =========================
   const getUser = async () => {
-    if (!userId) {
+    if (!lookupUserId) {
       alert("Enter user ID");
       return;
     }
 
     try {
-      const res = await fetch(`${API}/users/${userId}`);
+      const res = await fetch(`${API}/users/${lookupUserId}`);
 
       if (!res.ok) {
         alert("User not found");
@@ -62,6 +64,7 @@ function App() {
       console.log("GET USER:", data);
 
       setUser(data);
+      setUpdateUserId(String(data.id));
 
     } catch (err) {
       console.error(err);
@@ -70,22 +73,27 @@ function App() {
   };
 
   // =========================
-  // UPLOAD IMAGE (SAFE + DEBUG)
+  // UPDATE USER PROFILE PICTURE
   // =========================
   const uploadImage = async () => {
-    if (!file || !userId) {
-      alert("Create user and select file first");
+    if (!updateUserId) {
+      alert("Enter user ID for update");
+      return;
+    }
+
+    if (!file) {
+      alert("Select profile picture first");
       return;
     }
 
     try {
       const formData = new FormData();
-      formData.append("image", file);
+      formData.append("profilePicture", file);
 
-      console.log("Uploading for ID:", userId);
+      console.log("Uploading for ID:", updateUserId);
 
-      const res = await fetch(`${API}/upload/${userId}`, {
-        method: "POST",
+      const res = await fetch(`${API}/users/${updateUserId}`, {
+        method: "PUT",
         body: formData
       });
 
@@ -101,11 +109,14 @@ function App() {
       console.log("UPLOAD RESPONSE:", data);
 
       if (!res.ok) {
-        alert(data.message || "Upload failed");
+        alert(data.message || data.error || "Upload failed");
         return;
       }
 
-      alert(data.message);
+      console.log("UPDATED USER:", data);
+
+      setUser(data);
+      alert("Profile picture updated successfully");
 
     } catch (err) {
       console.error(err);
@@ -143,8 +154,8 @@ function App() {
 
       <input
         placeholder="User ID"
-        value={userId}
-        onChange={(e) => setUserId(e.target.value)}
+        value={lookupUserId}
+        onChange={(e) => setLookupUserId(e.target.value)}
       />
       <br /><br />
 
@@ -154,6 +165,13 @@ function App() {
 
       {/* UPLOAD IMAGE */}
       <h2>Upload Profile Picture</h2>
+
+      <input
+        placeholder="User ID to Update"
+        value={updateUserId}
+        onChange={(e) => setUpdateUserId(e.target.value)}
+      />
+      <br /><br />
 
       <input
         type="file"
@@ -172,6 +190,16 @@ function App() {
           <p><b>ID:</b> {user.id}</p>
           <p><b>Name:</b> {user.name}</p>
           <p><b>Email:</b> {user.email}</p>
+          {user.profilePicture && (
+            <div>
+              <p><b>Profile Picture:</b></p>
+              <img
+                src={user.profilePicture}
+                alt={`${user.name}'s profile`}
+                width="120"
+              />
+            </div>
+          )}
         </div>
       )}
     </div>
