@@ -9,6 +9,9 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.101.1",
+    "@tensorflow/tfjs": "^4.22.0",
+    "@vladmandic/face-api": "^1.7.15",
+    "canvas": "^3.2.3",
     "cors": "^2.8.5",
     "express": "^4.18.2",
     "lowdb": "^6.0.1",

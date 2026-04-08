@@ -1,0 +1,20 @@
+[
+  {
+    "url": "http://localhost:4000/uploads/1775645400786-219810713.png",
+    "uploadedAt": "2026-04-08T10:50:00.806Z"
+  },
+  {
+    "url": "http://localhost:4000/uploads/1775645377158-1003982.png",
+    "uploadedAt": "2026-04-08T10:49:37.180Z"
+  },
+  {
+    "url": "http://localhost:4000/uploads/1775645364479-952795437.jpeg",
+    "uploadedAt": "2026-04-08T10:49:24.487Z"
+  },
+  {
+    "url": "http://localhost:4000/uploads/1775644325226-513465599.png",
+    "uploadedAt": "2026-04-08T10:32:05.471Z",
+    "label": "wed's New Profile Picture",
+    "isProfile": true
+  }
+]

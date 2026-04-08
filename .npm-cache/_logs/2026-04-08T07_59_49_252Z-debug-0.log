@@ -1,0 +1,19 @@
+0 verbose cli /home/hashtech/user_profile/.local/node-v20.20.2-linux-x64/bin/node /home/hashtech/user_profile/.local/node-v20.20.2-linux-x64/bin/npm
+1 info using npm@10.8.2
+2 info using node@v20.20.2
+3 silly config load:file:/home/hashtech/user_profile/.local/node-v20.20.2-linux-x64/lib/node_modules/npm/npmrc
+4 silly config load:file:/home/hashtech/user_profile/frontend/.npmrc
+5 silly config load:file:/home/hashtech/.npmrc
+6 silly config load:file:/home/hashtech/user_profile/.local/node-v20.20.2-linux-x64/etc/npmrc
+7 verbose title npm ls
+8 verbose argv "ls" "--depth" "0"
+9 verbose logfile logs-max:10 dir:/home/hashtech/user_profile/.npm-cache/_logs/2026-04-08T07_59_49_252Z-
+10 verbose logfile /home/hashtech/user_profile/.npm-cache/_logs/2026-04-08T07_59_49_252Z-debug-0.log
+11 silly packumentCache heap:2197815296 maxSize:549453824 maxEntrySize:274726912
+12 silly logfile done cleaning log files
+13 verbose cwd /home/hashtech/user_profile/frontend
+14 verbose os Linux 6.17.0-14-generic
+15 verbose node v20.20.2
+16 verbose npm  v10.8.2
+17 verbose exit 0
+18 info ok
