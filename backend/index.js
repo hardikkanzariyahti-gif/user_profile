@@ -165,18 +165,60 @@ app.post('/api/identify', upload.single('image'), async (req, res) => {
     }
 
     // 3. Identify the target image
-    const match = await faceapi.identifyFace(req.file.path, labeledDescriptors);
+    const matches = await faceapi.identifyAllFaces(req.file.path, labeledDescriptors);
 
-    if (match) {
-      const matchData = JSON.parse(match.label);
-      res.json({ 
-        message: "Match found!", 
-        userId: matchData.id,
-        userName: matchData.name, 
-        confidence: (1 - match.distance).toFixed(2) 
-      });
+    if (matches && matches.length > 0) {
+      const identifiedUsers = [];
+      let unknownCount = 0;
+
+      let matchIndex = 0;
+      for (const match of matches) {
+        if (match.label === 'unknown') {
+          unknownCount++;
+        } else {
+          const matchData = JSON.parse(match.label);
+          // Fetch full user details from database to return email, etc.
+          const { data: matchedUser } = await supabase
+            .from('users')
+            .select('*')
+            .eq('id', matchData.id)
+            .single();
+
+          if (matchedUser) {
+            identifiedUsers.push({ 
+              ...matchedUser, 
+              id: `${matchedUser.id}_${matchIndex++}`, // Use a unique ID so React doesn't complain about duplicate keys
+              originalId: matchedUser.id,
+              confidence: (1 - match.distance).toFixed(2) 
+            });
+          }
+        }
+      }
+
+      if (identifiedUsers.length > 0) {
+        // Group by originalId to get unique names for the message
+        const uniqueNames = [...new Set(identifiedUsers.map(u => u.name))];
+        const namesStr = uniqueNames.join(' and ');
+        
+        let message = "";
+        if (identifiedUsers.length === 1 && unknownCount === 0) {
+          message = `Match found: This is ${namesStr}!`;
+        } else if (identifiedUsers.length > 1 && unknownCount === 0) {
+          message = `Matches found: ${namesStr}!`;
+        } else if (identifiedUsers.length > 0 && unknownCount > 0) {
+          message = `Matches found for ${namesStr}, and ${unknownCount} person(s) unrecognized.`;
+        }
+        
+        res.json({
+          message: message,
+          users: identifiedUsers,
+          unknownCount: unknownCount
+        });
+      } else {
+        res.json({ message: `Found ${unknownCount} unrecognized person(s).` });
+      }
     } else {
-      res.json({ message: "Unknown User" });
+      res.json({ message: "No faces found in the image." });
     }
     
     // Cleanup temporary upload
