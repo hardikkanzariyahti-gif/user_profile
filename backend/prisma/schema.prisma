@@ -1,0 +1,37 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id              Int           @id @default(autoincrement())
+  name            String
+  email           String        @unique
+  password        String
+  profile_picture String?       @map("profile picture")
+  galleryItems    GalleryItem[]
+
+  @@map("users")
+}
+
+model GalleryItem {
+  id                Int      @id @default(autoincrement())
+  url               String
+  uploadedAt        DateTime @default(now())
+  label             String?
+  isProfile        Boolean  @default(false)
+  userId            Int?
+  recognizedUserIds Int[]    @default([])
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@map("gallery")
+}

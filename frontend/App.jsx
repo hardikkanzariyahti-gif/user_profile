@@ -3,6 +3,7 @@ import { useState } from 'react';
 function App() {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [userId, setUserId] = useState('');
   const [user, setUser] = useState(null);
   const [file, setFile] = useState(null); // ✅ for image
@@ -19,13 +20,13 @@ function App() {
         headers: {
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({ name, email })
+        body: JSON.stringify({ name, email, password })
       });
 
       const data = await res.json();
 
       if (!res.ok) {
-        alert(data.error || "Error creating user");
+        alert(data.error || data.message || "Error creating user");
         return;
       }
 
@@ -70,17 +71,20 @@ function App() {
 
     try {
       const formData = new FormData();
-      formData.append("image", file);
+      formData.append("profilePicture", file);
 
       const res = await fetch(`${API}/users/${userId}`, {
         method: "PUT",
         body: formData
       });
 
-      const text = await res.text(); // ✅ prevents JSON crash
-      console.log("UPLOAD RESPONSE:", text);
-
-      alert("Upload API not ready yet (next step)");
+      const data = await res.json();
+      if (!res.ok) {
+        alert(data.error || data.message || "Upload failed");
+        return;
+      }
+      console.log("UPLOAD RESPONSE:", data);
+      alert("Upload successful");
 
     } catch (err) {
       console.error(err);
@@ -106,6 +110,14 @@ function App() {
         placeholder="Email"
         value={email}
         onChange={(e) => setEmail(e.target.value)}
+      />
+      <br /><br />
+
+      <input
+        type="password"
+        placeholder="Password (min 6 chars)"
+        value={password}
+        onChange={(e) => setPassword(e.target.value)}
       />
       <br /><br />
 

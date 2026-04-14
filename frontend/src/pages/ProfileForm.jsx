@@ -2,14 +2,17 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Save, Camera, Upload, AlertCircle, CheckCircle2 } from 'lucide-react';
 import CameraCapture from '../components/CameraCapture';
+import { createUser, fetchUserById, updateUser } from '../services/userService';
+import { identifyFace } from '../services/faceService';
 
 const ProfileForm = ({ mode = 'create' }) => {
   const { id } = useParams();
   const navigate = useNavigate();
-  
+
   const [formData, setFormData] = useState({
     name: '',
-    email: ''
+    email: '',
+    password: '',
   });
   const [errors, setErrors] = useState({});
   const [file, setFile] = useState(null);
@@ -21,18 +24,15 @@ const ProfileForm = ({ mode = 'create' }) => {
   useEffect(() => {
     if (mode === 'update' && id) {
       setLoading(true);
-      fetch(`http://localhost:4000/api/users/${id}`)
-        .then(res => {
-          if (!res.ok) throw new Error('User not found');
-          return res.json();
+      fetchUserById(id)
+        .then((data) => {
+          setFormData({ name: data.name, email: data.email, password: '' });
+          setPreview(data.profilePicture || data['profile picture']);
         })
-        .then(data => {
-          setFormData({ name: data.name, email: data.email });
-          setPreview(data['profile picture']);
-          setLoading(false);
-        })
-        .catch(err => {
+        .catch((err) => {
           setMessage({ type: 'error', text: err.message });
+        })
+        .finally(() => {
           setLoading(false);
         });
     }
@@ -46,15 +46,22 @@ const ProfileForm = ({ mode = 'create' }) => {
     } else if (!/\S+@\S+\.\S+/.test(formData.email)) {
       newErrors.email = 'Email is invalid';
     }
+
+    if (mode === 'create' && !formData.password) {
+      newErrors.password = 'Password is required to create a profile';
+    } else if (formData.password && formData.password.length < 6) {
+      newErrors.password = 'Password must be at least 6 characters';
+    }
+
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
-    setFormData(prev => ({ ...prev, [name]: value }));
+    setFormData((prev) => ({ ...prev, [name]: value }));
     if (errors[name]) {
-      setErrors(prev => ({ ...prev, [name]: '' }));
+      setErrors((prev) => ({ ...prev, [name]: '' }));
     }
   };
 
@@ -82,67 +89,39 @@ const ProfileForm = ({ mode = 'create' }) => {
 
     try {
       let resultId = id;
-      
-      // Step 0: Face Anti-Duplication Check
+
       if (file) {
-        setLoading(true);
         const verifyForm = new FormData();
         verifyForm.append('image', file);
-        
-        try {
-          const verifyRes = await fetch('http://localhost:4000/api/identify', {
-            method: 'POST',
-            body: verifyForm
-          });
-          
-          if (verifyRes.ok) {
-            const verifyData = await verifyRes.json();
-            if (verifyData.message === "Match found!") {
-              // If it's a match, and we are not updating THIS SAME user, block it!
-              if (mode === 'create' || String(verifyData.userId) !== String(id)) {
-                throw new Error(`Duplicate detected: This face is already registered to ${verifyData.userName}.`);
-              }
-            }
+        const verifyData = await identifyFace(verifyForm);
+
+        if (verifyData.users?.length) {
+          const detectedUser = verifyData.users[0];
+          if (mode === 'create' || String(detectedUser.originalId) !== String(id)) {
+            throw new Error(`Duplicate detected: This face is already registered to ${detectedUser.name}.`);
           }
-        } catch (err) {
-          throw err;
         }
       }
 
-      // Step 1: Create user if in create mode
       if (mode === 'create') {
-        const res = await fetch('http://localhost:4000/api/users', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(formData),
+        const created = await createUser({
+          name: formData.name,
+          email: formData.email,
+          password: formData.password,
         });
-        
-        if (!res.ok) {
-          const errData = await res.json();
-          throw new Error(errData.message || 'Failed to create profile');
-        }
-        
-        const data = await res.json();
-        resultId = data.id;
+        resultId = created.id;
       }
 
-      // Step 2: Upload picture or update text if in update mode or if we just created
       const updateForm = new FormData();
       if (file) updateForm.append('profilePicture', file);
       if (formData.name) updateForm.append('name', formData.name);
       if (formData.email) updateForm.append('email', formData.email);
+      if (formData.password) updateForm.append('password', formData.password);
 
-      const updateRes = await fetch(`http://localhost:4000/api/users/${resultId}`, {
-        method: 'PUT',
-        body: updateForm,
-      });
-
-      if (!updateRes.ok) {
-        throw new Error('Failed to update profile details');
-      }
+      await updateUser(resultId, updateForm);
 
       setMessage({ type: 'success', text: `Profile ${mode === 'create' ? 'created' : 'updated'} successfully!` });
-      setTimeout(() => navigate('/'), 1500);
+      setTimeout(() => navigate('/'), 1200);
     } catch (err) {
       setMessage({ type: 'error', text: err.message });
     } finally {
@@ -168,7 +147,7 @@ const ProfileForm = ({ mode = 'create' }) => {
         <form onSubmit={handleSubmit}>
           <div className="form-group">
             <label>Full Name</label>
-            <input 
+            <input
               name="name"
               value={formData.name}
               onChange={handleInputChange}
@@ -180,21 +159,39 @@ const ProfileForm = ({ mode = 'create' }) => {
 
           <div className="form-group">
             <label>Email Address</label>
-            <input 
+            <input
               name="email"
               type="email"
               value={formData.email}
               onChange={handleInputChange}
               placeholder="john@example.com"
               className={errors.email ? 'error' : ''}
-              disabled={mode === 'update'} // Usually email is primary
+              disabled={mode === 'update'}
             />
             {errors.email && <p className="error-message">{errors.email}</p>}
           </div>
 
           <div className="form-group">
+            <label>Security Password</label>
+            <input
+              name="password"
+              type="password"
+              value={formData.password}
+              onChange={handleInputChange}
+              placeholder="••••••••"
+              className={errors.password ? 'error' : ''}
+            />
+            <p style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+              {mode === 'create'
+                ? 'Create a password to secure your profile.'
+                : 'Leave blank to keep your current password.'}
+            </p>
+            {errors.password && <p className="error-message">{errors.password}</p>}
+          </div>
+
+          <div className="form-group">
             <label>Profile Picture</label>
-            
+
             <div className="flex flex-col items-center gap-4 mb-4" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem', marginBottom: '1rem' }}>
               {preview && !showCamera && (
                 <div className="user-avatar-container" style={{ width: '150px', height: '150px' }}>
@@ -204,27 +201,27 @@ const ProfileForm = ({ mode = 'create' }) => {
 
               {showCamera ? (
                 <div style={{ width: '100%' }}>
-                  <CameraCapture 
-                    onCapture={handleCameraCapture} 
-                    onCancel={() => setShowCamera(false)} 
+                  <CameraCapture
+                    onCapture={handleCameraCapture}
+                    onCancel={() => setShowCamera(false)}
                   />
                 </div>
               ) : (
                 <div className="flex gap-2" style={{ display: 'flex', gap: '0.5rem' }}>
-                  <button 
-                    type="button" 
-                    onClick={() => setShowCamera(true)} 
+                  <button
+                    type="button"
+                    onClick={() => setShowCamera(true)}
                     className="btn btn-outline"
                   >
                     <Camera size={18} /> Use Camera
                   </button>
                   <label className="btn btn-outline" style={{ cursor: 'pointer', margin: 0 }}>
                     <Upload size={18} /> Upload File
-                    <input 
-                      type="file" 
-                      accept="image/*" 
-                      onChange={handleFileChange} 
-                      style={{ display: 'none' }} 
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={handleFileChange}
+                      style={{ display: 'none' }}
                     />
                   </label>
                 </div>
@@ -232,9 +229,9 @@ const ProfileForm = ({ mode = 'create' }) => {
             </div>
           </div>
 
-          <button 
-            type="submit" 
-            className="btn btn-primary w-full" 
+          <button
+            type="submit"
+            className="btn btn-primary w-full"
             style={{ width: '100%', marginTop: '1rem' }}
             disabled={loading || showCamera}
           >

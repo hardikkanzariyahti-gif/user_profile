@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Upload, Image as ImageIcon, CheckCircle2, AlertCircle, Plus, Camera, X } from 'lucide-react';
+import { Image as ImageIcon, CheckCircle2, AlertCircle, Plus, Camera, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import CameraCapture from '../components/CameraCapture';
+import { fetchGallery, uploadGallery } from '../services/galleryService';
+import { identifyFace } from '../services/faceService';
 
-const Gallery = () => {
+const Gallery = ({ loggedInUser }) => {
   const [images, setImages] = useState([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
@@ -11,25 +13,19 @@ const Gallery = () => {
   const [matchedUsers, setMatchedUsers] = useState(null);
   const [showCamera, setShowCamera] = useState(false);
   const [cameraMode, setCameraMode] = useState('upload');
+  const loggedInUserId = loggedInUser ? Number(loggedInUser.originalId ?? loggedInUser.id) : null;
 
   useEffect(() => {
-    fetchGallery();
-  }, []);
+    loadGallery();
+  }, [loggedInUserId]);
 
-  const fetchGallery = async () => {
+  const loadGallery = async () => {
     try {
-      const res = await fetch('http://localhost:4000/api/gallery');
-      const data = await res.json();
-
-      // Prevent crash if backend returns an error object (Status 500)
-      if (!res.ok) {
-        throw new Error(data.error || 'Failed to fetch gallery');
-      }
-
+      const data = await fetchGallery(loggedInUserId);
       setImages(data);
     } catch (err) {
       console.error(err);
-      setImages([]); // Ensure images is always an array
+      setImages([]);
       setMessage({ type: 'error', text: err.message });
     } finally {
       setLoading(false);
@@ -39,19 +35,12 @@ const Gallery = () => {
   const uploadImages = async (files) => {
     setUploading(true);
     const formData = new FormData();
-    files.forEach(file => formData.append('gallery', file));
+    files.forEach((file) => formData.append('gallery', file));
 
     try {
-      const res = await fetch('http://localhost:4000/api/gallery', {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!res.ok) throw new Error('Failed to upload images');
-
-      const updatedGallery = await res.json();
+      const updatedGallery = await uploadGallery(formData, loggedInUserId);
       setImages(updatedGallery);
-      setMessage({ type: 'success', text: `Successfully added to the gallery!` });
+      setMessage({ type: 'success', text: 'Successfully added to the gallery!' });
       setTimeout(() => setMessage(null), 3000);
     } catch (err) {
       setMessage({ type: 'error', text: err.message });
@@ -65,31 +54,27 @@ const Gallery = () => {
     if (files.length > 0) uploadImages(files);
   };
 
+  const runFaceScan = async (file) => {
+    const formData = new FormData();
+    formData.append('image', file);
+    const result = await identifyFace(formData);
+
+    if (result.users && result.users.length > 0) {
+      setMatchedUsers(result.users);
+      setMessage({ type: 'success', text: result.message });
+    } else {
+      setMessage({ type: 'error', text: result.message || 'Unknown User' });
+    }
+  };
+
   const handleScanFace = async (imgUrl) => {
     setMessage({ type: 'info', text: 'AI is scanning face... please wait' });
 
     try {
-      // 1. Download image blob from URL
       const imageRes = await fetch(imgUrl);
       const blob = await imageRes.blob();
-      const file = new File([blob], "scan.jpg", { type: "image/jpeg" });
-
-      // 2. Send to Identify API
-      const formData = new FormData();
-      formData.append('image', file);
-
-      const res = await fetch('http://localhost:4000/api/identify', {
-        method: 'POST',
-        body: formData
-      });
-
-      const result = await res.json();
-      if (result.users && result.users.length > 0) {
-        setMatchedUsers(result.users);
-        setMessage({ type: 'success', text: result.message });
-      } else {
-        setMessage({ type: 'error', text: result.message || 'Unknown User' });
-      }
+      const file = new File([blob], 'scan.jpg', { type: 'image/jpeg' });
+      await runFaceScan(file);
     } catch (err) {
       setMessage({ type: 'error', text: 'AI Scan failed' });
     }
@@ -97,27 +82,16 @@ const Gallery = () => {
 
   const handleCameraCapture = async (file) => {
     if (cameraMode === 'upload') {
-      uploadImages([file]);
+      await uploadImages([file]);
     } else {
       setMessage({ type: 'info', text: 'Analyzing live face...' });
       try {
-        const formData = new FormData();
-        formData.append('image', file);
-        const res = await fetch('http://localhost:4000/api/identify', {
-          method: 'POST',
-          body: formData
-        });
-        const result = await res.json();
-        if (result.users && result.users.length > 0) {
-          setMatchedUsers(result.users);
-          setMessage({ type: 'success', text: result.message });
-        } else {
-          setMessage({ type: 'error', text: result.message || 'Unknown User' });
-        }
+        await runFaceScan(file);
       } catch (err) {
         setMessage({ type: 'error', text: 'AI Live Scan failed' });
       }
     }
+
     setShowCamera(false);
   };
 
@@ -127,12 +101,18 @@ const Gallery = () => {
     <div>
       <div className="flex justify-between items-center mb-10" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2.5rem' }}>
         <div>
-          <h2 className="card-title" style={{ fontSize: '2rem', marginBottom: '0.25rem' }}>Global Gallery</h2>
-          <p className="text-muted">Explore user profiles and shared gallery photos.</p>
+          <h2 className="card-title" style={{ fontSize: '2rem', marginBottom: '0.25rem' }}>
+            {loggedInUser ? `${loggedInUser.name}'s Gallery` : 'Global Gallery'}
+          </h2>
+          <p className="text-muted">
+            {loggedInUser
+              ? 'Showing all photos securely matched to your identity via AI.'
+              : 'Explore user profiles and shared gallery photos. Log in to filter your photos.'}
+          </p>
         </div>
         {!showCamera && (
           <div className="flex gap-4" style={{ display: 'flex', gap: '1rem' }}>
-            <button 
+            <button
               onClick={() => { setCameraMode('identify'); setShowCamera(true); }}
               className="btn btn-primary"
               style={{ padding: '1rem 2rem', background: '#ec4899', borderColor: '#ec4899' }}
@@ -197,68 +177,68 @@ const Gallery = () => {
         <div className="gallery-grid" style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
-          gap: '1.5rem'
+          gap: '1.5rem',
         }}>
           <AnimatePresence>
             {images.map((img, index) => (
-              <motion.div
-                key={index}
-                layout
-                initial={{ opacity: 0, scale: 0.9 }}
-                animate={{ opacity: 1, scale: 1 }}
-                whileHover={{ y: -5 }}
-                className="gallery-item"
-                style={{
-                  position: 'relative',
-                  aspectRatio: '1',
-                  borderRadius: '16px',
-                  overflow: 'hidden',
-                  boxShadow: 'var(--shadow)',
-                  background: 'white'
-                }}
-              >
-                <img
-                  src={img.url}
-                  alt={`Gallery ${index}`}
-                  style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                  loading="lazy"
-                />
-                <div className="gallery-info" style={{
-                  position: 'absolute',
-                  bottom: 0,
-                  left: 0,
-                  width: '100%',
-                  padding: '1rem',
-                  background: 'linear-gradient(to top, rgba(0,0,0,0.8), transparent)',
-                  color: 'white',
-                  fontSize: '0.875rem',
-                  transition: 'opacity 0.2s',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '0.5rem'
-                }}>
-                  <div className="flex justify-between" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span>{img.label || 'Shared Photo'}</span>
-                    {img.isProfile && (
-                      <span style={{
-                        background: 'var(--primary)',
-                        padding: '2px 8px',
-                        borderRadius: '4px',
-                        fontSize: '0.65rem',
-                        fontWeight: 'bold'
-                      }}>USER</span>
-                    )}
+                <motion.div
+                  key={img.id || index}
+                  layout
+                  initial={{ opacity: 0, scale: 0.9 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  whileHover={{ y: -5 }}
+                  className="gallery-item"
+                  style={{
+                    position: 'relative',
+                    aspectRatio: '1',
+                    borderRadius: '16px',
+                    overflow: 'hidden',
+                    boxShadow: 'var(--shadow)',
+                    background: 'white',
+                  }}
+                >
+                  <img
+                    src={img.url}
+                    alt={`Gallery ${index}`}
+                    style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                    loading="lazy"
+                  />
+                  <div className="gallery-info" style={{
+                    position: 'absolute',
+                    bottom: 0,
+                    left: 0,
+                    width: '100%',
+                    padding: '1rem',
+                    background: 'linear-gradient(to top, rgba(0,0,0,0.8), transparent)',
+                    color: 'white',
+                    fontSize: '0.875rem',
+                    transition: 'opacity 0.2s',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '0.5rem',
+                  }}>
+                    <div className="flex justify-between" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span>{img.label || 'Shared Photo'}</span>
+                      {img.isProfile && (
+                        <span style={{
+                          background: 'var(--primary)',
+                          padding: '2px 8px',
+                          borderRadius: '4px',
+                          fontSize: '0.65rem',
+                          fontWeight: 'bold',
+                        }}>USER</span>
+                      )}
+                    </div>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleScanFace(img.url); }}
+                      className="btn btn-primary"
+                      style={{ fontSize: '0.7rem', padding: '5px' }}
+                    >
+                      <Camera size={12} /> AI Scan Face
+                    </button>
                   </div>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); handleScanFace(img.url); }}
-                    className="btn btn-primary"
-                    style={{ fontSize: '0.7rem', padding: '5px' }}
-                  >
-                    <Camera size={12} /> AI Scan Face
-                  </button>
-                </div>
-              </motion.div>
-            ))}
+                </motion.div>
+              ))}
           </AnimatePresence>
         </div>
       )}
@@ -270,48 +250,47 @@ const Gallery = () => {
         </div>
       )}
 
-      {/* Matched Users Modal */}
       <AnimatePresence>
         {matchedUsers && matchedUsers.length > 0 && (
-          <motion.div 
+          <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            style={{ 
-              position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', 
-              background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 
+            style={{
+              position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh',
+              background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
             }}
             onClick={() => setMatchedUsers(null)}
           >
-            <motion.div 
+            <motion.div
               initial={{ scale: 0.8, y: 50 }}
               animate={{ scale: 1, y: 0 }}
               exit={{ scale: 0.8, y: 50 }}
-              className="card" 
-              style={{ width: '90%', maxWidth: '600px', maxHeight: '90vh', overflowY: 'auto', background: 'var(--surface)', padding: '2.5rem' }} 
-              onClick={e => e.stopPropagation()}
+              className="card"
+              style={{ width: '90%', maxWidth: '600px', maxHeight: '90vh', overflowY: 'auto', background: 'var(--surface)', padding: '2.5rem' }}
+              onClick={(e) => e.stopPropagation()}
             >
               <div className="text-center mb-6" style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
                 <div style={{ display: 'inline-flex', background: 'var(--primary)', color: 'white', padding: '0.3rem 1rem', borderRadius: '20px', fontWeight: 'bold', fontSize: '0.8rem' }}>
                   <CheckCircle2 size={16} style={{ marginRight: '0.5rem' }} /> Identity Verified ({matchedUsers.length})
                 </div>
               </div>
-              
+
               <div style={{ display: 'grid', gridTemplateColumns: matchedUsers.length > 1 ? '1fr 1fr' : '1fr', gap: '1.5rem', marginBottom: '2rem' }}>
                 {matchedUsers.map((user) => (
                   <div key={user.id} style={{ textAlign: 'center', background: 'rgba(0,0,0,0.02)', padding: '1.5rem', borderRadius: '16px', border: '1px solid var(--border-color)' }}>
                     <div style={{ width: '120px', height: '120px', margin: '0 auto 1rem', borderRadius: '50%', padding: '4px', background: 'linear-gradient(45deg, var(--primary), var(--secondary))' }}>
-                      <img 
-                        src={user['profile picture']} 
+                      <img
+                        src={user.profilePicture || user['profile picture']}
                         alt={user.name}
                         style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover', border: '4px solid var(--surface)' }}
                       />
                     </div>
-                    
+
                     <h3 style={{ fontSize: '1.4rem', marginBottom: '0.2rem', margin: 0, color: 'var(--text)' }}>
                       {user.name}
                     </h3>
-                    
+
                     <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '1rem' }}>
                       {user.email}
                     </p>
@@ -324,7 +303,7 @@ const Gallery = () => {
                   </div>
                 ))}
               </div>
-              
+
               <button className="btn btn-outline w-full" style={{ width: '100%' }} onClick={() => setMatchedUsers(null)}>
                 Close
               </button>
@@ -332,15 +311,6 @@ const Gallery = () => {
           </motion.div>
         )}
       </AnimatePresence>
-
-      <style>{`
-        .gallery-info {
-          opacity: 0;
-        }
-        .gallery-item:hover .gallery-info {
-          opacity: 1;
-        }
-      `}</style>
     </div>
   );
 };
