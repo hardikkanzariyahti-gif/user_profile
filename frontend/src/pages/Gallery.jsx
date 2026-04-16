@@ -229,6 +229,16 @@ const Gallery = ({ loggedInUser }) => {
                         }}>USER</span>
                       )}
                     </div>
+                    {img.recognizedUsers?.length > 0 && (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', fontSize: '0.75rem', color: '#f3f4f6' }}>
+                        <span style={{ opacity: 0.9 }}>Recognized:</span>
+                        {img.recognizedUsers.map((user) => (
+                          <span key={user.id} style={{ background: 'rgba(255,255,255,0.15)', padding: '0.2rem 0.5rem', borderRadius: '999px' }}>
+                            {user.name}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                     <button
                       onClick={(e) => { e.stopPropagation(); handleScanFace(img.url); }}
                       className="btn btn-primary"

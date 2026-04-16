@@ -1,0 +1,1 @@
+{"version":3,"file":"galleryService.d.ts","sourceRoot":"","sources":["../../src/services/galleryService.ts"],"names":[],"mappings":"AAEA,OAAO,KAAK,UAAU,MAAM,sBAAsB,CAAC;AASnD,iBAAe,uBAAuB,CAAC,KAAK,EAAE,GAAG,EAAE,gDAkBlD;AAUD,QAAA,MAAM,cAAc;yBACQ,GAAG;;;;;;;;;;0BA0EF,GAAG,EAAE,WAAe,GAAG;;;;;;;;;;;;;;CA4EnD,CAAC;AAEF,OAAO,EAAE,cAAc,EAAE,uBAAuB,EAAE,CAAC;AACnD,eAAe,cAAc,CAAC"}
