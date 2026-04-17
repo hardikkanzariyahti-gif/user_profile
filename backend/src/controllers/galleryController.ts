@@ -11,6 +11,48 @@ const galleryController = {
     const gallery = await galleryService.uploadGallery(req.files as any || [], req.query.userId);
     res.json(gallery);
   },
+
+  async refreshRecognition(req: Request, res: Response) {
+    const forceRescan = req.query.forceRescan === 'true' || req.body?.forceRescan === true;
+    
+    // Start it in the background to prevent V8 memory crashes and Browser timeouts for large lists
+    galleryService.refreshGalleryRecognition(forceRescan).catch(err => {
+      console.error('Background Sync Error:', err);
+    });
+
+    res.status(202).json({ message: 'Background sync started', status: galleryService.syncState });
+  },
+
+  async syncStatus(req: Request, res: Response) {
+    res.json(galleryService.syncState);
+  },
+
+  async tagFace(req: Request, res: Response) {
+    const galleryItemId = Number(req.body.galleryItemId);
+    const userId = Number(req.body.userId);
+    if (!galleryItemId || !userId || isNaN(galleryItemId) || isNaN(userId)) {
+      res.status(400).json({ error: 'galleryItemId and userId are required and must be valid numbers.' });
+      return;
+    }
+    const faceIndex = req.body.faceIndex !== undefined ? Number(req.body.faceIndex) : undefined;
+    const result = await galleryService.tagUnknownFace(galleryItemId, userId, faceIndex);
+    res.json(result);
+  },
+
+  async untagFace(req: Request, res: Response) {
+    const galleryItemId = Number(req.body.galleryItemId);
+    const userId = Number(req.body.userId);
+    if (!galleryItemId || !userId || isNaN(galleryItemId) || isNaN(userId)) {
+      res.status(400).json({ error: 'galleryItemId and userId are required and must be valid numbers.' });
+      return;
+    }
+    const faceIndex = req.body.faceIndex !== undefined ? Number(req.body.faceIndex) : undefined;
+    const result = await galleryService.untagFace(galleryItemId, userId, faceIndex);
+    res.json(result);
+  },
+
 };
+
+
 
 export default galleryController;

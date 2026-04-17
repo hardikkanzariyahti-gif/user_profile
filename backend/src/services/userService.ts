@@ -4,6 +4,7 @@ import galleryRepository from '../repositories/galleryRepository';
 import { APP_BASE_URL, UPLOADS_DIR } from '../config/constants';
 import { validateCreateUserInput, validateUpdateUserInput } from '../validators/userValidators';
 import { toUserResponse } from '../utils/serializers';
+import { galleryService } from './galleryService';
 import httpError from '../utils/httpError';
 
 function buildUploadUrl(filename: string): string {
@@ -28,7 +29,12 @@ const userService = {
     }
 
     const user = await userRepository.create(payload);
+    
+    // AI Improvement: Refresh Global Gallery recognition to catch any matches for this newly created user!
+    galleryService.refreshGalleryRecognition().catch((err: any) => console.error('Gallery refresh failed:', err));
+    
     return toUserResponse(user);
+
   },
 
   async listUsers() {
@@ -80,11 +86,15 @@ const userService = {
       await galleryRepository.createOne({
         url: buildUploadUrl(file.filename),
         uploadedAt: new Date(),
-        label: `${updatedUser.name}'s New Profile Picture`,
+        label: `${updatedUser.name}'s Profile Picture`,
         isProfile: true,
         userId: updatedUser.id,
         recognizedUserIds: [updatedUser.id],
       });
+      // Clear cached profile descriptor so it re-calculates from the new picture
+      await userRepository.updateById(userId, { profileDescriptor: null });
+      // Refresh gallery recognition in background with the new face data
+      galleryService.refreshGalleryRecognition().catch((err: any) => console.error('Gallery refresh failed:', err));
     }
 
     return toUserResponse(updatedUser);

@@ -8,6 +8,7 @@ const galleryRepository_1 = __importDefault(require("../repositories/galleryRepo
 const constants_1 = require("../config/constants");
 const userValidators_1 = require("../validators/userValidators");
 const serializers_1 = require("../utils/serializers");
+const galleryService_1 = require("./galleryService");
 const httpError_1 = __importDefault(require("../utils/httpError"));
 function buildUploadUrl(filename) {
     return `${constants_1.APP_BASE_URL}/uploads/${filename}`;
@@ -27,6 +28,8 @@ const userService = {
             throw (0, httpError_1.default)(400, 'A user with this email already exists.');
         }
         const user = await userRepository_1.default.create(payload);
+        // AI Improvement: Refresh Global Gallery recognition to catch any matches for this newly created user!
+        galleryService_1.galleryService.refreshGalleryRecognition().catch((err) => console.error('Gallery refresh failed:', err));
         return (0, serializers_1.toUserResponse)(user);
     },
     async listUsers() {
@@ -73,11 +76,15 @@ const userService = {
             await galleryRepository_1.default.createOne({
                 url: buildUploadUrl(file.filename),
                 uploadedAt: new Date(),
-                label: `${updatedUser.name}'s New Profile Picture`,
+                label: `${updatedUser.name}'s Profile Picture`,
                 isProfile: true,
                 userId: updatedUser.id,
                 recognizedUserIds: [updatedUser.id],
             });
+            // Clear cached profile descriptor so it re-calculates from the new picture
+            await userRepository_1.default.updateById(userId, { profileDescriptor: null });
+            // Refresh gallery recognition in background with the new face data
+            galleryService_1.galleryService.refreshGalleryRecognition().catch((err) => console.error('Gallery refresh failed:', err));
         }
         return (0, serializers_1.toUserResponse)(updatedUser);
     },

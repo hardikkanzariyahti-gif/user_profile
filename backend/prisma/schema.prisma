@@ -12,12 +12,13 @@ datasource db {
 }
 
 model User {
-  id              Int           @id @default(autoincrement())
-  name            String
-  email           String        @unique
-  password        String
-  profile_picture String?       @map("profile picture")
-  galleryItems    GalleryItem[]
+  id                Int           @id @default(autoincrement())
+  name              String
+  email             String        @unique
+  password          String
+  profile_picture   String?       @map("profile picture")
+  profileDescriptor Json?         @map("profile_descriptor")
+  galleryItems      GalleryItem[]
 
   @@map("users")
 }
@@ -27,11 +28,13 @@ model GalleryItem {
   url               String
   uploadedAt        DateTime @default(now())
   label             String?
-  isProfile        Boolean  @default(false)
+  isProfile         Boolean  @default(false)
   userId            Int?
   recognizedUserIds Int[]    @default([])
+  faceDescriptors   Json?    @map("face_descriptors")
 
   user User? @relation(fields: [userId], references: [id])
 
   @@map("gallery")
 }
+

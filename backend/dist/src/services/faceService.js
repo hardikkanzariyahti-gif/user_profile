@@ -43,7 +43,7 @@ const userRepository_1 = __importDefault(require("../repositories/userRepository
 const galleryService_1 = require("./galleryService");
 const faceService = {
     async identifyImage(filePath) {
-        const users = await userRepository_1.default.findUsersWithProfilePicture();
+        const users = await userRepository_1.default.findAllForRecognition();
         const labeledDescriptors = await (0, galleryService_1.buildLabeledDescriptors)(users);
         if (labeledDescriptors.length === 0) {
             return { message: 'No known faces to compare with.' };

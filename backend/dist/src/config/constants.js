@@ -35,7 +35,7 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.UPLOADS_DIR = exports.APP_BASE_URL = exports.PORT = void 0;
 const path = __importStar(require("path"));
-const PORT = Number(process.env.PORT || 4000);
+const PORT = Number(process.env.PORT || 4001);
 exports.PORT = PORT;
 const APP_BASE_URL = process.env.APP_BASE_URL || `http://localhost:${PORT}`;
 exports.APP_BASE_URL = APP_BASE_URL;

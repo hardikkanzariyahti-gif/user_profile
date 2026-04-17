@@ -43,19 +43,6 @@ const routes_1 = __importDefault(require("./routes"));
 const constants_1 = require("./config/constants");
 const notFound_1 = __importDefault(require("./middlewares/notFound"));
 const errorHandler_1 = __importDefault(require("./middlewares/errorHandler"));
-try {
-    const Module = require('module');
-    const originalLoad = Module._load;
-    Module._load = function patchedLoad(request, parent, isMain) {
-        if (request === '@tensorflow/tfjs-node') {
-            return require('@tensorflow/tfjs');
-        }
-        return originalLoad.call(this, request, parent, isMain);
-    };
-}
-catch (err) {
-    console.warn('AI Compatibility Hack: Could not patch tensorflow loader');
-}
 const app = (0, express_1.default)();
 app.use((0, cors_1.default)());
 app.use(express_1.default.json());

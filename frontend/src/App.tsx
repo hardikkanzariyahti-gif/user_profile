@@ -24,7 +24,7 @@ const Navigation: React.FC = () => {
         Gallery
       </Link>
       <Link to="/create" className={`nav-link ${location.pathname === '/create' ? 'active' : ''}`}>
-        Get Started
+        Sign In
       </Link>
     </nav>
   );

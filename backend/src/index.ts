@@ -1,3 +1,4 @@
+import './patch';
 import loadEnv from './config/loadEnv';
 loadEnv();
 

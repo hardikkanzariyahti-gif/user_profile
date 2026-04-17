@@ -6,7 +6,7 @@ import { buildLabeledDescriptors } from './galleryService';
 
 const faceService = {
   async identifyImage(filePath: string) {
-    const users = await userRepository.findUsersWithProfilePicture();
+    const users = await userRepository.findAllForRecognition();
     const labeledDescriptors = await buildLabeledDescriptors(users);
 
     if (labeledDescriptors.length === 0) {

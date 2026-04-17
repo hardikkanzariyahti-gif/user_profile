@@ -24,13 +24,17 @@ declare function toGalleryResponse(item: GalleryItem & {
     recognizedUsers?: any[];
 }): {
     id: number;
-    url: string;
+    url: string | null | undefined;
     uploadedAt: Date;
     label: string | null | undefined;
     isProfile: boolean;
     userId: number | null | undefined;
     recognizedUserIds: number[];
-    recognizedUsers: any[];
+    recognizedUsers: {
+        id: any;
+        name: any;
+        profilePicture: string | null;
+    }[];
 };
 export { toUserResponse, toGalleryResponse };
 //# sourceMappingURL=serializers.d.ts.map

@@ -101,8 +101,11 @@ const ProfileForm: React.FC<ProfileFormProps> = ({ mode = 'create' }) => {
 
         if (verifyData.users?.length) {
           const detectedUser = verifyData.users[0];
-          if (mode === 'create' || String(detectedUser.originalId) !== String(id)) {
-            throw new Error(`Duplicate detected: This face is already registered to ${detectedUser.name}.`);
+          // Only block if the AI is highly confident (confidence > 0.6) to avoid false positives!
+          if (detectedUser.confidence > 0.6) {
+            if (mode === 'create' || String(detectedUser.originalId) !== String(id)) {
+              throw new Error(`Duplicate detected: This face is already registered to ${detectedUser.name}.`);
+            }
           }
         }
       }
@@ -139,7 +142,7 @@ const ProfileForm: React.FC<ProfileFormProps> = ({ mode = 'create' }) => {
 
   return (
     <div className="max-w-2xl mx-auto" style={{ maxWidth: '600px', margin: '0 auto' }}>
-      <button onClick={() => navigate('/')} className="btn btn-outline mb-6" style={{ marginBottom: '1.5rem' }}>
+      <button type="button" onClick={() => navigate('/')} className="btn btn-outline mb-6" style={{ marginBottom: '1.5rem' }}>
         <ArrowLeft size={18} /> Back to List
       </button>
 

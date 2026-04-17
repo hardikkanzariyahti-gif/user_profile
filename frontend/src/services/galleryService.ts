@@ -12,3 +12,32 @@ export function uploadGallery(formData: FormData, userId?: number): Promise<any>
     body: formData,
   });
 }
+
+export function refreshGallery(forceRescan = false): Promise<any> {
+  const query = forceRescan ? '?forceRescan=true' : '';
+  return request(`/api/gallery/refresh${query}`, {
+    method: 'POST',
+  });
+}
+
+export function getSyncStatus(): Promise<any> {
+  return request(`/api/gallery/sync-status`);
+}
+
+export function tagFaceInPhoto(galleryItemId: number, userId: number, faceIndex?: number): Promise<any> {
+  return request(`/api/gallery/tag-face`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ galleryItemId, userId, faceIndex }),
+  });
+}
+
+export function untagFaceInPhoto(galleryItemId: number, userId: number, faceIndex?: number): Promise<any> {
+  return request(`/api/gallery/untag-face`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ galleryItemId, userId, faceIndex }),
+  });
+}
+
+

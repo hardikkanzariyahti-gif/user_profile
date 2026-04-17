@@ -58,10 +58,10 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({ onCapture, onCancel }) =>
       />
       <canvas ref={canvasRef} style={{ display: 'none' }} width={640} height={480} />
       <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center' }}>
-        <button className="btn btn-primary" onClick={handleCapture} style={{ padding: '0.75rem 1.5rem' }}>
+        <button type="button" className="btn btn-primary" onClick={handleCapture} style={{ padding: '0.75rem 1.5rem' }}>
           <Camera size={18} /> Capture
         </button>
-        <button className="btn btn-outline" onClick={onCancel} style={{ padding: '0.75rem 1.5rem' }}>
+        <button type="button" className="btn btn-outline" onClick={onCancel} style={{ padding: '0.75rem 1.5rem' }}>
           <X size={18} /> Cancel
         </button>
       </div>

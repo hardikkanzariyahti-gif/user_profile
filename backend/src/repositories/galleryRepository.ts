@@ -7,7 +7,9 @@ interface GalleryItemData {
   isProfile?: boolean;
   userId?: number | null;
   recognizedUserIds: number[];
+  faceDescriptors?: any;
 }
+
 
 const galleryRepository = {
   findAll() {

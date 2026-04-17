@@ -136,19 +136,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
               </button>
             </form>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', margin: '1.5rem 0' }}>
-              <div style={{ flex: 1, height: '1px', background: 'var(--border-color)' }}></div>
-              <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 600 }}>OR USE</span>
-              <div style={{ flex: 1, height: '1px', background: 'var(--border-color)' }}></div>
-            </div>
 
-            <button
-              onClick={() => setShowCamera(true)}
-              className="btn btn-outline w-full"
-              style={{ width: '100%', color: 'var(--accent)', borderColor: 'var(--accent)' }}
-            >
-              <Camera size={18} /> Face Identification Login
-            </button>
           </>
         )}
       </div>

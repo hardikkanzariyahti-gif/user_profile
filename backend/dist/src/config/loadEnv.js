@@ -44,8 +44,12 @@ function unquote(value) {
 }
 function loadEnv() {
     const envPath = path.join(__dirname, '../../.env');
-    if (!fs.existsSync(envPath))
+    console.log('DEBUG: Checking for .env at:', envPath);
+    if (!fs.existsSync(envPath)) {
+        console.log('DEBUG: .env NOT FOUND!');
         return;
+    }
+    console.log('DEBUG: .env FOUND, loading...');
     const content = fs.readFileSync(envPath, 'utf8');
     const lines = content.split(/\r?\n/);
     for (const line of lines) {

@@ -27,6 +27,7 @@ const userRepository = {
             select: {
                 id: true,
                 name: true,
+                profile_picture: true,
             },
         });
     },
@@ -51,7 +52,22 @@ const userRepository = {
                 name: true,
                 email: true,
                 profile_picture: true,
+                profileDescriptor: true,
             },
+        });
+    },
+    // Returns ALL users — used for building recognition model from tagged photos
+    // even users without profile pictures (they get bootstrapped from manual tags)
+    findAllForRecognition() {
+        return prisma_1.default.user.findMany({
+            select: {
+                id: true,
+                name: true,
+                email: true,
+                profile_picture: true,
+                profileDescriptor: true,
+            },
+            orderBy: { id: 'asc' },
         });
     },
 };

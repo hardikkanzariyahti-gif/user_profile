@@ -5,35 +5,39 @@ interface GalleryItemData {
     isProfile?: boolean;
     userId?: number | null;
     recognizedUserIds: number[];
+    faceDescriptors?: any;
 }
 declare const galleryRepository: {
     findAll(): import(".prisma/client").Prisma.PrismaPromise<{
-        id: number;
         url: string;
+        id: number;
         uploadedAt: Date;
         label: string | null;
         isProfile: boolean;
         userId: number | null;
         recognizedUserIds: number[];
+        faceDescriptors: import("@prisma/client/runtime/library").JsonValue | null;
     }[]>;
     updateById(id: number, data: any): import(".prisma/client").Prisma.Prisma__GalleryItemClient<{
-        id: number;
         url: string;
+        id: number;
         uploadedAt: Date;
         label: string | null;
         isProfile: boolean;
         userId: number | null;
         recognizedUserIds: number[];
+        faceDescriptors: import("@prisma/client/runtime/library").JsonValue | null;
     }, never, import("@prisma/client/runtime/library").DefaultArgs>;
     createMany(items: GalleryItemData[]): import(".prisma/client").Prisma.PrismaPromise<import(".prisma/client").Prisma.BatchPayload>;
     createOne(data: GalleryItemData): import(".prisma/client").Prisma.Prisma__GalleryItemClient<{
-        id: number;
         url: string;
+        id: number;
         uploadedAt: Date;
         label: string | null;
         isProfile: boolean;
         userId: number | null;
         recognizedUserIds: number[];
+        faceDescriptors: import("@prisma/client/runtime/library").JsonValue | null;
     }, never, import("@prisma/client/runtime/library").DefaultArgs>;
 };
 export default galleryRepository;
