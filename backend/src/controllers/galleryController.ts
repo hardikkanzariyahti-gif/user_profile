@@ -51,6 +51,22 @@ const galleryController = {
     res.json(result);
   },
 
+  async getClusters(req: Request, res: Response) {
+    const clusters = await galleryService.getUnknownFaceClusters();
+    res.json(clusters);
+  },
+
+  async mergeCluster(req: Request, res: Response) {
+    const userId = Number(req.body.userId);
+    const faces = req.body.faces; 
+    if (!userId || isNaN(userId) || !Array.isArray(faces)) {
+      res.status(400).json({ error: 'userId and faces array are required.' });
+      return;
+    }
+    const result = await galleryService.mergeClusterFaces(userId, faces);
+    res.json(result);
+  },
+
 };
 
 

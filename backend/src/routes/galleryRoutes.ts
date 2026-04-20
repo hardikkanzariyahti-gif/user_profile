@@ -11,7 +11,8 @@ router.post('/refresh', asyncHandler(galleryController.refreshRecognition));
 router.get('/sync-status', asyncHandler(galleryController.syncStatus));
 router.post('/tag-face', asyncHandler(galleryController.tagFace));
 router.post('/untag-face', asyncHandler(galleryController.untagFace));
-
+router.get('/clusters', asyncHandler(galleryController.getClusters));
+router.post('/clusters/merge', asyncHandler(galleryController.mergeCluster));
 
 
 export default router;

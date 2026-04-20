@@ -1,15 +1,11 @@
 import * as path from 'path';
 import userRepository from '../repositories/userRepository';
 import galleryRepository from '../repositories/galleryRepository';
-import { APP_BASE_URL, UPLOADS_DIR } from '../config/constants';
+import { UPLOADS_DIR } from '../config/constants';
 import { validateCreateUserInput, validateUpdateUserInput } from '../validators/userValidators';
 import { toUserResponse } from '../utils/serializers';
-import { galleryService } from './galleryService';
+import { buildUploadUrl } from '../utils/urlUtils';
 import httpError from '../utils/httpError';
-
-function buildUploadUrl(filename: string): string {
-  return `${APP_BASE_URL}/uploads/${filename}`;
-}
 
 function normalizeUserId(id: any): number {
   const userId = Number(id);
@@ -31,7 +27,9 @@ const userService = {
     const user = await userRepository.create(payload);
     
     // AI Improvement: Refresh Global Gallery recognition to catch any matches for this newly created user!
-    galleryService.refreshGalleryRecognition().catch((err: any) => console.error('Gallery refresh failed:', err));
+    // Break circular dependency with local require
+    const { galleryService } = require('./galleryService');
+    galleryService.refreshGalleryRecognition().catch((err: any) => console.log('[Sync] Background refresh failed:', err));
     
     return toUserResponse(user);
 
@@ -94,7 +92,9 @@ const userService = {
       // Clear cached profile descriptor so it re-calculates from the new picture
       await userRepository.updateById(userId, { profileDescriptor: null });
       // Refresh gallery recognition in background with the new face data
-      galleryService.refreshGalleryRecognition().catch((err: any) => console.error('Gallery refresh failed:', err));
+      // Break circular dependency with local require
+      const { galleryService } = require('./galleryService');
+      galleryService.refreshGalleryRecognition().catch((err: any) => console.log('[Sync] Background refresh failed:', err));
     }
 
     return toUserResponse(updatedUser);

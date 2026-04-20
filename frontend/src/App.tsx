@@ -5,6 +5,9 @@ import UserList from './pages/UserList';
 import ProfileForm from './pages/ProfileForm';
 import Gallery from './pages/Gallery';
 import Login from './pages/Login';
+import Albums from './pages/MyAlbums';
+import AlbumDetail from './pages/AlbumDetail';
+import SharedAlbum from './pages/SharedAlbum';
 
 interface UserProfile {
   id: number;
@@ -13,7 +16,13 @@ interface UserProfile {
   originalId?: number;
 }
 
-const Navigation: React.FC = () => {
+import People from './pages/People';
+
+interface NavigationProps {
+  loggedInUser: UserProfile | null;
+}
+
+const Navigation: React.FC<NavigationProps> = ({ loggedInUser }) => {
   const location = useLocation();
   return (
     <nav className="nav-links">
@@ -23,6 +32,14 @@ const Navigation: React.FC = () => {
       <Link to="/gallery" className={`nav-link ${location.pathname === '/gallery' ? 'active' : ''}`}>
         Gallery
       </Link>
+      <Link to="/people" className={`nav-link ${location.pathname === '/people' ? 'active' : ''}`}>
+        People
+      </Link>
+      {loggedInUser && (
+        <Link to="/albums" className={`nav-link ${location.pathname.startsWith('/albums') ? 'active' : ''}`}>
+          Albums
+        </Link>
+      )}
       <Link to="/create" className={`nav-link ${location.pathname === '/create' ? 'active' : ''}`}>
         Sign In
       </Link>
@@ -75,7 +92,7 @@ function App() {
             </div>
           </Link>
           <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-            <Navigation />
+            <Navigation loggedInUser={loggedInUser} />
             <div style={{ marginLeft: '1rem', paddingLeft: '1rem', borderLeft: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
               {loggedInUser ? (
                 <>
@@ -98,6 +115,10 @@ function App() {
           <Route path="/create" element={<ProfileForm mode="create" />} />
           <Route path="/update/:id" element={<ProfileForm mode="update" />} />
           <Route path="/gallery" element={<Gallery loggedInUser={loggedInUser} />} />
+          <Route path="/people" element={<People />} />
+          <Route path="/albums" element={<Albums loggedInUser={loggedInUser} />} />
+          <Route path="/albums/:id" element={<AlbumDetail loggedInUser={loggedInUser} />} />
+          <Route path="/s/:shareId" element={<SharedAlbum />} />
         </Routes>
 
         <footer style={{ marginTop: '4rem', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.875rem' }}>

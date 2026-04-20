@@ -19,6 +19,7 @@ model User {
   profile_picture   String?       @map("profile picture")
   profileDescriptor Json?         @map("profile_descriptor")
   galleryItems      GalleryItem[]
+  albums            Album[]
 
   @@map("users")
 }
@@ -35,6 +36,22 @@ model GalleryItem {
 
   user User? @relation(fields: [userId], references: [id])
 
+  albums Album[] @relation("AlbumItems")
+
   @@map("gallery")
+}
+
+model Album {
+  id          Int           @id @default(autoincrement())
+  title       String
+  description String?
+  isGlobal    Boolean       @default(true)
+  shareId     String        @unique @default(dbgenerated("gen_random_uuid()"))
+  createdAt   DateTime      @default(now())
+  userId      Int
+  user        User          @relation(fields: [userId], references: [id])
+  items       GalleryItem[] @relation("AlbumItems")
+
+  @@map("albums")
 }
 

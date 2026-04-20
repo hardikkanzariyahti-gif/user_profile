@@ -5,6 +5,8 @@ import CameraCapture from '../components/CameraCapture';
 import { fetchGallery, uploadGallery, refreshGallery, tagFaceInPhoto, untagFaceInPhoto, getSyncStatus } from '../services/galleryService';
 import { identifyFace } from '../services/faceService';
 import { fetchUsers } from '../services/userService';
+import { createAlbum } from '../services/albumService';
+import { Album as AlbumIcon, CheckSquare, Square, Share2 } from 'lucide-react';
 
 interface UserProfile {
   id: number;
@@ -44,6 +46,13 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
   const [tagSelectedFaceIndex, setTagSelectedFaceIndex] = useState<number | null>(null);
   const [imageNaturalSize, setImageNaturalSize] = useState<{w: number, h: number} | null>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
+
+  // --- Album Selection State ---
+  const [isSelectionMode, setIsSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const [showAlbumModal, setShowAlbumModal] = useState(false);
+  const [newAlbumTitle, setNewAlbumTitle] = useState('');
+  const [creatingAlbum, setCreatingAlbum] = useState(false);
   
   useEffect(() => {
     if (tagModalImage && imgRef.current && imgRef.current.complete) {
@@ -244,10 +253,43 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
       setMessage({ type: 'success', text: result.message + (result.profilePictureSet ? ' Profile picture was set automatically!' : '') });
       setTimeout(() => setMessage(null), 5000);
       await loadGallery();
-    } catch (err: any) {
-      setMessage({ type: 'error', text: err.message || 'Tagging failed. Please try again.' });
     } finally {
       setTagging(false);
+    }
+  };
+
+  // --- Album Selection Handlers ---
+  const toggleSelectionMode = () => {
+    setIsSelectionMode(!isSelectionMode);
+    setSelectedIds([]);
+  };
+
+  const toggleImageSelection = (id: number) => {
+    setSelectedIds(prev => 
+      prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
+    );
+  };
+
+  const handleCreateAlbum = async () => {
+    if (!newAlbumTitle.trim() || selectedIds.length === 0 || !loggedInUserId) return;
+    setCreatingAlbum(true);
+    try {
+      const album = await createAlbum({
+        title: newAlbumTitle,
+        userId: loggedInUserId,
+        itemIds: selectedIds,
+        isGlobal: true, // New albums are global by default as requested
+      });
+      setMessage({ type: 'success', text: `Album "${album.title}" created successfully!` });
+      setIsSelectionMode(false);
+      setSelectedIds([]);
+      setNewAlbumTitle('');
+      setShowAlbumModal(false);
+      setTimeout(() => setMessage(null), 3000);
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err.message || 'Failed to create album' });
+    } finally {
+      setCreatingAlbum(false);
     }
   };
 
@@ -466,29 +508,54 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
           <AnimatePresence>
             {images.map((img, index) => (
               <motion.div
-                key={img.id || index}
-                layout
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                whileHover={{ y: -8, transition: { duration: 0.2 } }}
-                className="gallery-item"
-                style={{
-                  position: 'relative',
-                  aspectRatio: '4/5',
+                key={img.id}
+                initial={{ opacity: 0, scale: 0.9 }}
+                animate={{ opacity: 1, scale: 1 }}
+                transition={{ duration: 0.3, delay: index * 0.05 }}
+                className={`gallery-card ${selectedIds.includes(Number(img.id)) ? 'selected' : ''}`}
+                onClick={() => toggleImageSelection(Number(img.id))}
+                style={{ 
+                  position: 'relative', 
+                  cursor: 'pointer',
+                  border: selectedIds.includes(Number(img.id)) ? '4px solid var(--primary)' : 'none',
+                  transform: selectedIds.includes(Number(img.id)) ? 'scale(0.98)' : 'none',
                   borderRadius: '24px',
                   overflow: 'hidden',
-                  boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.05)',
-                  background: 'white',
-                  cursor: 'pointer'
+                  boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.2), 0 8px 10px -6px rgba(0, 0, 0, 0.1)',
+                  background: 'white'
                 }}
-                onClick={() => handleOpenPreview(img, index)}
               >
                 <img
                   src={img.url}
-                  alt={`Gallery ${index}`}
-                  style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                  alt={`Gallery item ${img.id}`}
+                  style={{ width: '100%', height: '100%', objectFit: 'cover', aspectRatio: '4/5' }}
                   loading="lazy"
                 />
+                
+                {/* Visual Checkbox (Round Button) - Always visible for easy selection */}
+                <div 
+                  onClick={(e) => { e.stopPropagation(); toggleImageSelection(Number(img.id)); }}
+                  style={{
+                    position: 'absolute',
+                    top: '12px',
+                    right: '12px',
+                    background: selectedIds.includes(Number(img.id)) ? 'var(--primary)' : 'rgba(255,255,255,0.3)',
+                    backdropFilter: 'blur(8px)',
+                    borderRadius: '50%',
+                    width: '32px',
+                    height: '32px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: 'white',
+                    zIndex: 20,
+                    border: '2px solid white',
+                    transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+                    boxShadow: '0 4px 6px -1px rgba(0,0,0,0.2)'
+                  }}
+                >
+                  <CheckCircle2 size={20} style={{ opacity: selectedIds.includes(Number(img.id)) ? 1 : 0.4 }} />
+                </div>
 
                 {/* Always-Visible Identity Tags */}
                 <div style={{
@@ -563,15 +630,16 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
                       {new Date((img as any).uploadedAt || 0).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
                     </span>
                     <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
-                      {img.isProfile && (
-                        <span style={{ background: '#6366f1', padding: '4px 8px', borderRadius: '6px', fontSize: '0.6rem', fontWeight: 900, color: 'white' }}>
-                          PRIMARY
-                        </span>
-                      )}
-                      {/* Tag Face Button — always visible on hover */}
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleOpenPreview(img, index); }}
+                        className="btn"
+                        style={{ padding: '4px 10px', fontSize: '0.65rem', background: 'rgba(255,255,255,0.15)', backdropFilter: 'blur(4px)' }}
+                      >
+                         Preview
+                      </button>
                       {!img.isProfile && (
                         <button
-                          onClick={(e) => handleOpenTagModal(img, e)}
+                          onClick={(e) => { e.stopPropagation(); handleOpenTagModal(img, e); }}
                           title="Tag a person in this photo"
                           style={{
                             background: 'rgba(99,102,241,0.85)',
@@ -594,7 +662,6 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
                     </div>
                   </div>
                 </motion.div>
-
               </motion.div>
             ))}
           </AnimatePresence>
@@ -679,7 +746,6 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
                     style={{ maxWidth: '100%', maxHeight: '320px', objectFit: 'contain', display: 'block' }} 
                   />
                   {imageNaturalSize && tagModalImage.faces && tagModalImage.faces.length > 0 && tagModalImage.faces.map((face: any) => {
-                     // The box can be { _x, _y, _width, _height } or { x, y, width, height }
                      const x = face.box._x ?? face.box.x;
                      const y = face.box._y ?? face.box.y;
                      const w = face.box._width ?? face.box.width;
@@ -974,6 +1040,103 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
                     <span style={{ color: 'white', opacity: 0.4, fontStyle: 'italic' }}>No faces identified yet</span>
                   )}
                 </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Selection Action Bar */}
+      <AnimatePresence>
+        {selectedIds.length > 0 && (
+          <motion.div
+            initial={{ y: 100 }}
+            animate={{ y: 0 }}
+            exit={{ y: 100 }}
+            style={{
+              position: 'fixed',
+              bottom: '2rem',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              background: 'rgba(30, 41, 59, 0.9)',
+              backdropFilter: 'blur(16px)',
+              padding: '1rem 2rem',
+              borderRadius: '20px',
+              border: '1px solid rgba(255,255,255,0.1)',
+              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.5)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '2rem',
+              zIndex: 1000,
+              width: 'max-content'
+            }}
+          >
+            <div style={{ color: 'white', fontWeight: 700 }}>
+              {selectedIds.length} photo{selectedIds.length > 1 ? 's' : ''} selected
+            </div>
+            <button 
+              onClick={() => setShowAlbumModal(true)}
+              className="btn btn-primary" 
+              style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+            >
+              <AlbumIcon size={18} /> Create Album
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Album Creation Modal */}
+      <AnimatePresence>
+        {showAlbumModal && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            style={{
+              position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh',
+              background: 'rgba(0,0,0,0.8)', backdropFilter: 'blur(8px)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 3000
+            }}
+            onClick={() => setShowAlbumModal(false)}
+          >
+            <motion.div
+              initial={{ scale: 0.9, y: 20 }}
+              animate={{ scale: 1, y: 0 }}
+              style={{
+                background: '#1e293b', padding: '2.5rem', borderRadius: '24px',
+                width: '90%', maxWidth: '400px', border: '1px solid rgba(255,255,255,0.1)'
+              }}
+              onClick={e => e.stopPropagation()}
+            >
+              <h2 style={{ color: 'white', marginBottom: '1.5rem', fontSize: '1.5rem', fontWeight: 800 }}>New Album</h2>
+              <p style={{ color: 'rgba(255,255,255,0.6)', marginBottom: '1.5rem' }}>Give your collection of {selectedIds.length} photos a memorable name.</p>
+              
+              <input
+                type="text"
+                placeholder="Ex: Summer Vacation 2024"
+                value={newAlbumTitle}
+                onChange={e => setNewAlbumTitle(e.target.value)}
+                autoFocus
+                style={{
+                  width: '100%', padding: '1rem', borderRadius: '12px',
+                  background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
+                  color: 'white', fontSize: '1rem', marginBottom: '2rem', outline: 'none'
+                }}
+              />
+
+              <div style={{ display: 'flex', gap: '1rem' }}>
+                <button onClick={() => setShowAlbumModal(false)} style={{ flex: 1, padding: '1rem', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.1)', background: 'transparent', color: 'white', fontWeight: 600, cursor: 'pointer' }}>Cancel</button>
+                <button 
+                  onClick={handleCreateAlbum}
+                  disabled={!newAlbumTitle.trim() || creatingAlbum}
+                  style={{ 
+                    flex: 1, padding: '1rem', borderRadius: '12px', border: 'none', 
+                    background: 'var(--primary)', color: 'white', fontWeight: 700, 
+                    cursor: newAlbumTitle.trim() ? 'pointer' : 'not-allowed', opacity: newAlbumTitle.trim() ? 1 : 0.5 
+                  }}
+                >
+                  {creatingAlbum ? 'Creating...' : 'Create Album'}
+                </button>
               </div>
             </motion.div>
           </motion.div>
