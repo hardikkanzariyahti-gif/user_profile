@@ -30,7 +30,7 @@ export function deleteAlbum(id: number, userId: number): Promise<any> {
     });
 }
 
-export function editAlbum(id: number, userId: number, data: { title: string; description?: string }): Promise<any> {
+export function editAlbum(id: number, userId: number, data: { title: string; description?: string; itemIds?: number[] }): Promise<any> {
     const query = `?userId=${encodeURIComponent(userId)}`;
     return request(`/api/albums/${id}${query}`, {
         method: 'PUT',

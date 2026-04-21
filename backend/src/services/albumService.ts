@@ -33,7 +33,7 @@ const albumService = {
     return albumRepository.delete(id);
   },
 
-  async updateAlbum(id: number, userId: number, data: { title?: string; description?: string }) {
+  async updateAlbum(id: number, userId: number, data: { title?: string; description?: string; itemIds?: number[] }) {
     const album = await albumRepository.findById(id);
     if (!album) throw new Error('Album not found');
     if (album.userId !== userId) throw new Error('Unauthorized to update this album');

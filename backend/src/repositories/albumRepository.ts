@@ -80,12 +80,18 @@ const albumRepository = {
     });
   },
   
-  update(id: number, data: { title?: string; description?: string }) {
+  update(id: number, data: { title?: string; description?: string; itemIds?: number[] }) {
     return prisma.album.update({
       where: { id },
       data: {
         title: data.title,
         description: data.description,
+        items: data.itemIds ? {
+          set: data.itemIds.map(itemId => ({ id: itemId })),
+        } : undefined,
+      },
+      include: {
+        items: true,
       },
     });
   },

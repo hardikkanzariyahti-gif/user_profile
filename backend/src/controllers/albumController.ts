@@ -72,10 +72,10 @@ export const albumController = {
   async update(req: Request, res: Response) {
     const userId = Number(req.query.userId);
     const id = Number(req.params.id);
-    const { title, description } = req.body;
+    const { title, description, itemIds } = req.body;
 
     try {
-      const album = await albumService.updateAlbum(id, userId, { title, description });
+      const album = await albumService.updateAlbum(id, userId, { title, description, itemIds });
       res.json(album);
     } catch (error: any) {
       res.status(400).json({ error: error.message });
