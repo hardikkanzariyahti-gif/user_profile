@@ -5,14 +5,10 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const userRepository_1 = __importDefault(require("../repositories/userRepository"));
 const galleryRepository_1 = __importDefault(require("../repositories/galleryRepository"));
-const constants_1 = require("../config/constants");
 const userValidators_1 = require("../validators/userValidators");
 const serializers_1 = require("../utils/serializers");
-const galleryService_1 = require("./galleryService");
+const urlUtils_1 = require("../utils/urlUtils");
 const httpError_1 = __importDefault(require("../utils/httpError"));
-function buildUploadUrl(filename) {
-    return `${constants_1.APP_BASE_URL}/uploads/${filename}`;
-}
 function normalizeUserId(id) {
     const userId = Number(id);
     if (!Number.isInteger(userId) || userId <= 0) {
@@ -29,7 +25,9 @@ const userService = {
         }
         const user = await userRepository_1.default.create(payload);
         // AI Improvement: Refresh Global Gallery recognition to catch any matches for this newly created user!
-        galleryService_1.galleryService.refreshGalleryRecognition().catch((err) => console.error('Gallery refresh failed:', err));
+        // Break circular dependency with local require
+        const { galleryService } = require('./galleryService');
+        galleryService.refreshGalleryRecognition().catch((err) => console.log('[Sync] Background refresh failed:', err));
         return (0, serializers_1.toUserResponse)(user);
     },
     async listUsers() {
@@ -48,7 +46,7 @@ const userService = {
         const userId = normalizeUserId(id);
         const updates = (0, userValidators_1.validateUpdateUserInput)(body);
         if (file) {
-            updates.profile_picture = buildUploadUrl(file.filename);
+            updates.profile_picture = (0, urlUtils_1.buildUploadUrl)(file.filename);
         }
         if (Object.keys(updates).length === 0) {
             const existing = await userRepository_1.default.findById(userId);
@@ -74,7 +72,7 @@ const userService = {
         }
         if (file) {
             await galleryRepository_1.default.createOne({
-                url: buildUploadUrl(file.filename),
+                url: (0, urlUtils_1.buildUploadUrl)(file.filename),
                 uploadedAt: new Date(),
                 label: `${updatedUser.name}'s Profile Picture`,
                 isProfile: true,
@@ -84,7 +82,9 @@ const userService = {
             // Clear cached profile descriptor so it re-calculates from the new picture
             await userRepository_1.default.updateById(userId, { profileDescriptor: null });
             // Refresh gallery recognition in background with the new face data
-            galleryService_1.galleryService.refreshGalleryRecognition().catch((err) => console.error('Gallery refresh failed:', err));
+            // Break circular dependency with local require
+            const { galleryService } = require('./galleryService');
+            galleryService.refreshGalleryRecognition().catch((err) => console.log('[Sync] Background refresh failed:', err));
         }
         return (0, serializers_1.toUserResponse)(updatedUser);
     },
@@ -101,7 +101,7 @@ const userService = {
             throw err;
         }
     },
-    buildUploadUrl,
+    buildUploadUrl: urlUtils_1.buildUploadUrl,
     normalizeUserId,
 };
 exports.default = userService;

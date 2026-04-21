@@ -1,4 +1,8 @@
-import * as faceApiLib from '@vladmandic/face-api';
+export declare class LabeledFaceDescriptors {
+    label: string;
+    descriptors: Float32Array[];
+    constructor(label: string, descriptors: Float32Array[]);
+}
 /**
  * Build a LabeledFaceDescriptors model for each user so face-api can match
  * detected faces to known people.
@@ -8,7 +12,7 @@ import * as faceApiLib from '@vladmandic/face-api';
  *   2. If no profile picture → bootstrap from all faces found in their tagged photos
  *   3. Enrich with up to 10 additional confirmed photos (improves angle coverage)
  */
-declare function buildLabeledDescriptors(users: any[]): Promise<faceApiLib.LabeledFaceDescriptors[]>;
+declare function buildLabeledDescriptors(users: any[]): Promise<LabeledFaceDescriptors[]>;
 declare const galleryService: {
     listGallery(userId?: any): Promise<{
         id: number;
@@ -18,6 +22,72 @@ declare const galleryService: {
         isProfile: boolean;
         userId: number | null | undefined;
         recognizedUserIds: number[];
+        hashtags: string[];
+        faces: {
+            index: number;
+            box: any;
+            manuallyTaggedUserId: any;
+        }[];
+        recognizedUsers: {
+            id: any;
+            name: any;
+            profilePicture: string | null;
+        }[];
+    }[]>;
+    getGalleryItem(id: number): Promise<{
+        id: number;
+        url: string | null | undefined;
+        uploadedAt: Date;
+        label: string | null | undefined;
+        isProfile: boolean;
+        userId: number | null | undefined;
+        recognizedUserIds: number[];
+        hashtags: string[];
+        faces: {
+            index: number;
+            box: any;
+            manuallyTaggedUserId: any;
+        }[];
+        recognizedUsers: {
+            id: any;
+            name: any;
+            profilePicture: string | null;
+        }[];
+    }>;
+    setGalleryItemHashtags(id: number, hashtagsInput: any): Promise<{
+        id: number;
+        url: string | null | undefined;
+        uploadedAt: Date;
+        label: string | null | undefined;
+        isProfile: boolean;
+        userId: number | null | undefined;
+        recognizedUserIds: number[];
+        hashtags: string[];
+        faces: {
+            index: number;
+            box: any;
+            manuallyTaggedUserId: any;
+        }[];
+        recognizedUsers: {
+            id: any;
+            name: any;
+            profilePicture: string | null;
+        }[];
+    }>;
+    searchGalleryByHashtag(rawTag: string): Promise<{
+        id: number;
+        url: string | null | undefined;
+        uploadedAt: Date;
+        label: string | null | undefined;
+        isProfile: boolean;
+        userId: number | null | undefined;
+        recognizedUserIds: number[];
+        hashtags: string[];
+        faces: {
+            index: number;
+            box: any;
+            manuallyTaggedUserId: any;
+        }[];
         recognizedUsers: {
             id: any;
             name: any;
@@ -32,6 +102,12 @@ declare const galleryService: {
         isProfile: boolean;
         userId: number | null | undefined;
         recognizedUserIds: number[];
+        hashtags: string[];
+        faces: {
+            index: number;
+            box: any;
+            manuallyTaggedUserId: any;
+        }[];
         recognizedUsers: {
             id: any;
             name: any;
@@ -46,11 +122,11 @@ declare const galleryService: {
      * - Invalidates in-memory model cache (model must be rebuilt with new training data)
      * - Triggers background refresh to propagate recognition to other photos
      */
-    tagUnknownFace(galleryItemId: number, userId: number): Promise<{
+    tagUnknownFace(galleryItemId: number, userId: number, faceIndex?: number): Promise<{
         message: string;
         profilePictureSet: boolean;
     }>;
-    untagFace(galleryItemId: number, userId: number): Promise<{
+    untagFace(galleryItemId: number, userId: number, faceIndex?: number): Promise<{
         message: string;
     }>;
     /**
@@ -63,9 +139,35 @@ declare const galleryService: {
      *                     detector re-processes every photo from scratch.
      *                     Essential after detection logic changes.
      */
+    syncState: {
+        isScanning: boolean;
+        total: number;
+        current: number;
+    };
     refreshGalleryRecognition(forceRescan?: boolean): Promise<{
+        message: string;
+        updatedCount?: undefined;
+        total?: undefined;
+        durationSc?: undefined;
+    } | {
         updatedCount: number;
         total: number;
+        durationSc: string;
+        message?: undefined;
+    }>;
+    getUnknownFaceClusters(): Promise<{
+        clusterId: any;
+        faceCount: any;
+        anchorImage: any;
+        anchorBox: any;
+        relatedPhotos: any;
+    }[]>;
+    mergeClusterFaces(userId: number, faces: {
+        itemId: number;
+        faceIndex: number;
+    }[]): Promise<{
+        message: string;
+        updatedCount: number;
     }>;
 };
 export { galleryService, buildLabeledDescriptors };

@@ -7,6 +7,33 @@ const galleryController = {
     res.json(gallery);
   },
 
+  async getById(req: Request, res: Response) {
+    const id = Number(req.params.id);
+    if (!id || isNaN(id)) {
+      res.status(400).json({ error: 'Valid gallery id is required.' });
+      return;
+    }
+    const item = await galleryService.getGalleryItem(id);
+    res.json(item);
+  },
+
+  async setHashtags(req: Request, res: Response) {
+    const id = Number(req.params.id);
+    if (!id || isNaN(id)) {
+      res.status(400).json({ error: 'Valid gallery id is required.' });
+      return;
+    }
+    const hashtags = req.body?.hashtags ?? req.body?.tags ?? req.body;
+    const item = await galleryService.setGalleryItemHashtags(id, hashtags);
+    res.json(item);
+  },
+
+  async searchByHashtag(req: Request, res: Response) {
+    const tag = String(req.query.tag ?? '');
+    const results = await galleryService.searchGalleryByHashtag(tag);
+    res.json(results);
+  },
+
   async upload(req: Request, res: Response) {
     const gallery = await galleryService.uploadGallery(req.files as any || [], req.query.userId);
     res.json(gallery);

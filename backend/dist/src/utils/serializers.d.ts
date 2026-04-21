@@ -12,6 +12,8 @@ interface GalleryItem {
     isProfile: boolean;
     userId?: number | null;
     recognizedUserIds: number[];
+    hashtags: string[];
+    faceDescriptors?: any | null;
 }
 declare function toUserResponse(user: User): {
     id: number;
@@ -30,6 +32,12 @@ declare function toGalleryResponse(item: GalleryItem & {
     isProfile: boolean;
     userId: number | null | undefined;
     recognizedUserIds: number[];
+    hashtags: string[];
+    faces: {
+        index: number;
+        box: any;
+        manuallyTaggedUserId: any;
+    }[];
     recognizedUsers: {
         id: any;
         name: any;

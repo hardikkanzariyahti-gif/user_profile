@@ -7,6 +7,34 @@ import userRepository from '../repositories/userRepository';
 import { toGalleryResponse } from '../utils/serializers';
 import httpError from '../utils/httpError';
 import { buildUploadUrl } from '../utils/urlUtils';
+import { normalizeHashtags, normalizeTag } from '../utils/hashtagUtils';
+
+async function getGalleryItemResponseById(id: number) {
+  const [item, allUsers] = await Promise.all([
+    galleryRepository.findById(id),
+    userRepository.findAllForRecognition(),
+  ]);
+  if (!item) throw httpError(404, 'Gallery item not found');
+
+  const userMap: Record<number, any> = {};
+  for (const u of allUsers) userMap[u.id] = u;
+
+  const enriched: any = {
+    ...item,
+    recognizedUsers: (Array.isArray((item as any).recognizedUserIds) ? (item as any).recognizedUserIds : [])
+      .map((uid: any) => userMap[Number(uid)])
+      .filter(Boolean),
+  };
+
+  return toGalleryResponse(enriched);
+}
+
+async function getUsersMap() {
+  const allUsers = await userRepository.findAllForRecognition();
+  const userMap: Record<number, any> = {};
+  for (const u of allUsers) userMap[u.id] = u;
+  return userMap;
+}
 
 export class LabeledFaceDescriptors {
   label: string;
@@ -293,6 +321,39 @@ const galleryService = {
 
     // Enrich with user data (name + profilePicture)
     const enriched = visibleItems.map((item: any) => ({
+      ...item,
+      recognizedUsers: (Array.isArray(item.recognizedUserIds) ? item.recognizedUserIds : [])
+        .map((id: any) => userMap[Number(id)])
+        .filter(Boolean),
+    }));
+
+    return enriched.map(toGalleryResponse);
+  },
+
+  async getGalleryItem(id: number) {
+    return getGalleryItemResponseById(id);
+  },
+
+  async setGalleryItemHashtags(id: number, hashtagsInput: any) {
+    const item = await galleryRepository.findById(id);
+    if (!item) throw httpError(404, 'Gallery item not found');
+    if ((item as any).isProfile) throw httpError(400, 'Cannot tag a profile item.');
+
+    const hashtags = normalizeHashtags(hashtagsInput);
+    await galleryRepository.updateById(id, { hashtags });
+    return getGalleryItemResponseById(id);
+  },
+
+  async searchGalleryByHashtag(rawTag: string) {
+    const tag = normalizeTag(rawTag);
+    if (!tag) throw httpError(400, 'Valid hashtag is required.');
+
+    const [items, userMap] = await Promise.all([
+      galleryRepository.findByHashtag(tag),
+      getUsersMap(),
+    ]);
+
+    const enriched = items.map((item: any) => ({
       ...item,
       recognizedUsers: (Array.isArray(item.recognizedUserIds) ? item.recognizedUserIds : [])
         .map((id: any) => userMap[Number(id)])
@@ -625,7 +686,7 @@ const galleryService = {
       }
       if (!merged) {
         clusters.push({
-           clusterId: `cluster-${Date.now()}-${Math.floor(Math.random()*1000)}`,
+           clusterId: `cluster-${face.itemId}-${face.faceIndex}`,
            faces: [face]
         });
       }

@@ -13,6 +13,9 @@ router.post('/tag-face', asyncHandler(galleryController.tagFace));
 router.post('/untag-face', asyncHandler(galleryController.untagFace));
 router.get('/clusters', asyncHandler(galleryController.getClusters));
 router.post('/clusters/merge', asyncHandler(galleryController.mergeCluster));
+router.get('/search', asyncHandler(galleryController.searchByHashtag));
+router.post('/:id/hashtags', asyncHandler(galleryController.setHashtags));
+router.get('/:id', asyncHandler(galleryController.getById));
 
 
 export default router;

@@ -5,6 +5,23 @@ export function fetchGallery(userId?: number): Promise<any> {
   return request(`/api/gallery${query}`);
 }
 
+export function fetchGalleryItem(galleryItemId: number): Promise<any> {
+  return request(`/api/gallery/${encodeURIComponent(String(galleryItemId))}`);
+}
+
+export function setGalleryItemHashtags(galleryItemId: number, hashtags: string[]): Promise<any> {
+  return request(`/api/gallery/${encodeURIComponent(String(galleryItemId))}/hashtags`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ hashtags }),
+  });
+}
+
+export function searchGalleryByHashtag(tag: string): Promise<any> {
+  const query = `?tag=${encodeURIComponent(tag)}`;
+  return request(`/api/gallery/search${query}`);
+}
+
 export function uploadGallery(formData: FormData, userId?: number): Promise<any> {
   const query = userId ? `?userId=${encodeURIComponent(userId)}` : '';
   return request(`/api/gallery${query}`, {
@@ -39,5 +56,3 @@ export function untagFaceInPhoto(galleryItemId: number, userId: number, faceInde
     body: JSON.stringify({ galleryItemId, userId, faceIndex }),
   });
 }
-
-

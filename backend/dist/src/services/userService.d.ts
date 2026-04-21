@@ -1,4 +1,4 @@
-declare function buildUploadUrl(filename: string): string;
+import { buildUploadUrl } from '../utils/urlUtils';
 declare function normalizeUserId(id: any): number;
 declare const userService: {
     createUser(body: any): Promise<{

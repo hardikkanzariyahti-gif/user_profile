@@ -18,6 +18,21 @@ const galleryRepository = {
     });
   },
 
+  findById(id: number) {
+    return prisma.galleryItem.findUnique({
+      where: { id },
+    });
+  },
+
+  findByHashtag(tag: string) {
+    return prisma.galleryItem.findMany({
+      where: {
+        hashtags: { has: tag },
+      },
+      orderBy: { uploadedAt: 'desc' },
+    });
+  },
+
   updateById(id: number, data: any) {
     return prisma.galleryItem.update({
       where: { id },

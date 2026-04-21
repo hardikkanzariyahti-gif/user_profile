@@ -1,12 +1,10 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Image as ImageIcon, CheckCircle2, AlertCircle, Plus, Camera, X, ChevronLeft, ChevronRight, RotateCcw, Tag, UserCheck, RefreshCw } from 'lucide-react';
+﻿import React, { useEffect, useMemo, useState } from 'react';
+import { Image as ImageIcon, CheckCircle2, AlertCircle, Plus, Camera, X, ChevronLeft, ChevronRight, Album as AlbumIcon, CheckSquare, Square, Share2, Hash, RefreshCw, RotateCcw, ChevronDown } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { useNavigate } from 'react-router-dom';
 import CameraCapture from '../components/CameraCapture';
-import { fetchGallery, uploadGallery, refreshGallery, tagFaceInPhoto, untagFaceInPhoto, getSyncStatus } from '../services/galleryService';
-import { identifyFace } from '../services/faceService';
-import { fetchUsers } from '../services/userService';
+import { fetchGallery, uploadGallery, refreshGallery, getSyncStatus, setGalleryItemHashtags } from '../services/galleryService';
 import { createAlbum } from '../services/albumService';
-import { Album as AlbumIcon, CheckSquare, Square, Share2 } from 'lucide-react';
 
 interface UserProfile {
   id: number;
@@ -22,6 +20,7 @@ interface GalleryItem {
   isProfile: boolean;
   recognizedUsers?: UserProfile[];
   faces?: any[];
+  hashtags?: string[];
 }
 
 interface GalleryProps {
@@ -29,23 +28,21 @@ interface GalleryProps {
 }
 
 const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
+  const navigate = useNavigate();
   const [images, setImages] = useState<GalleryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [message, setMessage] = useState<{ type: string; text: string } | null>(null);
-  const [matchedUsers, setMatchedUsers] = useState<any[] | null>(null);
   const [showCamera, setShowCamera] = useState(false);
-  const [cameraMode, setCameraMode] = useState<'upload' | 'identify'>('upload');
-  const [viewMode, setViewMode] = useState<'personal' | 'global'>('personal');
+  const [viewMode, setViewMode] = useState<'personal' | 'global'>(() => (loggedInUser ? 'personal' : 'global'));
   const [selectedImage, setSelectedImage] = useState<GalleryItem | null>(null);
   const [currentIndex, setCurrentIndex] = useState<number>(0);
-  // --- Tag Face State ---
-  const [tagModalImage, setTagModalImage] = useState<GalleryItem | null>(null);
-  const [tagSelectedUserId, setTagSelectedUserId] = useState<number | null>(null);
-  const [tagSelectedFaceIndex, setTagSelectedFaceIndex] = useState<number | null>(null);
-  const [imageNaturalSize, setImageNaturalSize] = useState<{w: number, h: number} | null>(null);
-  const imgRef = useRef<HTMLImageElement | null>(null);
+  const [editingHashtags, setEditingHashtags] = useState(false);
+  const [hashtagsDraft, setHashtagsDraft] = useState('');
+  const [savingHashtags, setSavingHashtags] = useState(false);
+  const [openHashtagsEditorNext, setOpenHashtagsEditorNext] = useState(false);
+  const [syncMenuOpen, setSyncMenuOpen] = useState(false);
 
   // --- Album Selection State ---
   const [isSelectionMode, setIsSelectionMode] = useState(false);
@@ -53,21 +50,43 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
   const [showAlbumModal, setShowAlbumModal] = useState(false);
   const [newAlbumTitle, setNewAlbumTitle] = useState('');
   const [creatingAlbum, setCreatingAlbum] = useState(false);
-  
-  useEffect(() => {
-    if (tagModalImage && imgRef.current && imgRef.current.complete) {
-      setImageNaturalSize({ w: imgRef.current.naturalWidth, h: imgRef.current.naturalHeight });
-    }
-  }, [tagModalImage]);
-
-  const [allUsers, setAllUsers] = useState<any[]>([]);
-  const [tagging, setTagging] = useState(false);
 
   const loggedInUserId = loggedInUser ? Number(loggedInUser.originalId ?? loggedInUser.id) : null;
+
+  const parsedHashtagsDraft = useMemo(() => {
+    const raw = (hashtagsDraft || '').trim();
+    if (!raw) return [];
+    const hashtagMatches = raw.match(/#[a-z0-9_-]+/gi);
+    const parts = (hashtagMatches && hashtagMatches.length > 0) ? hashtagMatches : raw.split(/[\s,]+/g);
+    const out: string[] = [];
+    const seen = new Set<string>();
+    for (const p of parts) {
+      const norm = p.trim().replace(/^#+/, '').toLowerCase().replace(/[^a-z0-9_-]/g, '').slice(0, 40);
+      if (!norm) continue;
+      if (seen.has(norm)) continue;
+      seen.add(norm);
+      out.push(norm);
+      if (out.length >= 20) break;
+    }
+    return out;
+  }, [hashtagsDraft]);
 
   useEffect(() => {
     loadGallery();
   }, [loggedInUserId, viewMode]);
+
+  useEffect(() => {
+    // If user is not logged in, personal mode makes no sense (and leads to confusing empty-state text).
+    if (!loggedInUserId && viewMode === 'personal') setViewMode('global');
+  }, [loggedInUserId, viewMode]);
+
+  useEffect(() => {
+    if (!selectedImage || selectedImage.isProfile) return;
+    const tags = Array.isArray(selectedImage.hashtags) ? selectedImage.hashtags : [];
+    setHashtagsDraft(tags.map(t => `#${t}`).join(' '));
+    setEditingHashtags(openHashtagsEditorNext);
+    setOpenHashtagsEditorNext(false);
+  }, [selectedImage?.id]);
 
   const loadGallery = async () => {
     setLoading(true);
@@ -84,6 +103,50 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
       setLoading(false);
     }
   };
+
+  const handleRefreshRecognition = async (forceRescan = false) => {
+    setRefreshing(true);
+    setSyncMenuOpen(false);
+    setMessage({ type: 'info', text: forceRescan ? 'Force rescan started in background...' : 'AI sync started in background...' });
+    try {
+      await refreshGallery(forceRescan);
+    } catch (err) {
+      setMessage({ type: 'error', text: 'Sync failed to start. Please try again later.' });
+      setRefreshing(false);
+    }
+  };
+
+  useEffect(() => {
+    let interval: ReturnType<typeof setInterval> | undefined;
+    if (refreshing) {
+      interval = setInterval(async () => {
+        try {
+          const status = await getSyncStatus();
+          if (status && status.isScanning) {
+            setMessage({ type: 'info', text: `AI task running: ${status.current} / ${status.total}` });
+          } else if (status && !status.isScanning) {
+            setRefreshing(false);
+            if (interval) clearInterval(interval);
+            await loadGallery();
+            setMessage({ type: 'success', text: 'AI sync complete. Gallery updated.' });
+            setTimeout(() => setMessage(null), 5000);
+          }
+        } catch {
+          // ignore transient status errors
+        }
+      }, 1500);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [refreshing]);
+
+  useEffect(() => {
+    if (!syncMenuOpen) return;
+    const onDocClick = () => setSyncMenuOpen(false);
+    document.addEventListener('click', onDocClick);
+    return () => document.removeEventListener('click', onDocClick);
+  }, [syncMenuOpen]);
 
   const uploadImages = async (files: File[]) => {
     setUploading(true);
@@ -114,54 +177,16 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
     if (files.length > 0) uploadImages(files);
   };
 
-  const runFaceScan = async (file: File) => {
-    const formData = new FormData();
-    formData.append('image', file);
-    const result = await identifyFace(formData);
-
-    if (result.users && result.users.length > 0) {
-      setMatchedUsers(result.users);
-      setMessage({ type: 'success', text: result.message });
-    } else {
-      setMessage({ type: 'error', text: result.message || 'Unknown User' });
-    }
-  };
-
-  const handleRefreshRecognition = async (forceRescan = false) => {
-    setRefreshing(true);
-    setMessage({ type: 'info', text: 'Initiating massive background scan...' });
-    try {
-      await refreshGallery(forceRescan);
-    } catch (err) {
-      setMessage({ type: 'error', text: 'AI Sync failed to start. Please try again later.' });
-      setRefreshing(false);
-    }
-  };
-
-  useEffect(() => {
-    let interval: ReturnType<typeof setInterval>;
-    if (refreshing) {
-      interval = setInterval(async () => {
-        try {
-          const status = await getSyncStatus();
-          if (status && status.isScanning) {
-             setMessage({ type: 'info', text: `⏳ AI Background Task: Scanned ${status.current} of ${status.total} photos...` });
-          } else if (status && !status.isScanning) {
-             setRefreshing(false);
-             clearInterval(interval);
-             await loadGallery();
-             setMessage({ type: 'success', text: `✨ AI Task Complete! Your massive gallery has been instantly updated without crashing.` });
-             setTimeout(() => setMessage(null), 5000);
-          }
-        } catch (e) {
-             // Silently ignore ping drops
-        }
-      }, 1500);
-    }
-    return () => clearInterval(interval);
-  }, [refreshing]);
-
   const handleOpenPreview = (img: GalleryItem, index: number) => {
+    setOpenHashtagsEditorNext(false);
+    setSelectedImage(img);
+    setCurrentIndex(index);
+  };
+
+  const handleOpenHashtags = (img: GalleryItem, index: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (img.isProfile) return;
+    setOpenHashtagsEditorNext(true);
     setSelectedImage(img);
     setCurrentIndex(index);
   };
@@ -186,75 +211,35 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
     }
   };
 
-  const handleScanFace = async (imgUrl: string) => {
-    setMessage({ type: 'info', text: 'AI is scanning face... please wait' });
-
-    try {
-      const imageRes = await fetch(imgUrl);
-      const blob = await imageRes.blob();
-      const file = new File([blob], 'scan.jpg', { type: 'image/jpeg' });
-      await runFaceScan(file);
-    } catch (err) {
-      setMessage({ type: 'error', text: 'AI Scan failed' });
-    }
-  };
-
   const handleCameraCapture = async (file: File) => {
     setShowCamera(false);
-
-    if (cameraMode === 'upload') {
-      await uploadImages([file]);
-    } else {
-      setMessage({ type: 'info', text: 'Analyzing live face...' });
-      try {
-        await runFaceScan(file);
-      } catch (err) {
-        setMessage({ type: 'error', text: 'Live Scan failed' });
-      }
-    }
+    await uploadImages([file]);
   };
 
-  // --- Tag Face Handlers ---
-  const handleOpenTagModal = async (img: GalleryItem, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setTagSelectedUserId(null);
-    setTagSelectedFaceIndex(null);
-    setImageNaturalSize(null);
-    setTagModalImage(img);
+  const handleSaveHashtags = async () => {
+    if (!selectedImage || selectedImage.isProfile) return;
+    const itemId = typeof selectedImage.id === 'string'
+      ? parseInt(selectedImage.id.replace('profile-', ''), 10)
+      : selectedImage.id;
+    if (isNaN(itemId as number)) return;
+
+    setSavingHashtags(true);
     try {
-      const users = await fetchUsers();
-      setAllUsers(users);
-    } catch (err) {
-      setAllUsers([]);
-    }
-  };
+      const updated = await setGalleryItemHashtags(itemId as number, parsedHashtagsDraft);
+      const updatedTags = Array.isArray(updated?.hashtags) ? updated.hashtags : [];
 
-  const handleCloseTagModal = () => {
-    setTagModalImage(null);
-    setTagSelectedUserId(null);
-    setTagSelectedFaceIndex(null);
-    setImageNaturalSize(null);
-  };
-
-  const handleConfirmTag = async () => {
-    if (!tagModalImage || !tagSelectedUserId) return;
-    const itemId = typeof tagModalImage.id === 'string'
-      ? parseInt(tagModalImage.id.replace('profile-', ''), 10)
-      : tagModalImage.id;
-    if (isNaN(itemId as number)) {
-      setMessage({ type: 'error', text: 'Cannot tag a profile photo directly.' });
-      handleCloseTagModal();
-      return;
-    }
-    setTagging(true);
-    try {
-      const result = await tagFaceInPhoto(itemId as number, tagSelectedUserId, tagSelectedFaceIndex ?? undefined);
-      handleCloseTagModal();
-      setMessage({ type: 'success', text: result.message + (result.profilePictureSet ? ' Profile picture was set automatically!' : '') });
-      setTimeout(() => setMessage(null), 5000);
-      await loadGallery();
+      setImages(prev => prev.map(img => {
+        const id = typeof img.id === 'string' ? parseInt(img.id.replace('profile-', ''), 10) : img.id;
+        return id === itemId ? { ...img, hashtags: updatedTags } : img;
+      }));
+      setSelectedImage(prev => prev ? { ...prev, hashtags: updatedTags } : prev);
+      setEditingHashtags(false);
+      setMessage({ type: 'success', text: 'Hashtags updated.' });
+      setTimeout(() => setMessage(null), 2500);
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err.message || 'Failed to update hashtags.' });
     } finally {
-      setTagging(false);
+      setSavingHashtags(false);
     }
   };
 
@@ -293,29 +278,6 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
     }
   };
 
-  const handleRemoveTag = async (img: GalleryItem, userId: number, e: React.MouseEvent) => {
-    e.stopPropagation();
-    const itemId = typeof img.id === 'string'
-      ? parseInt(img.id.replace('profile-', ''), 10)
-      : img.id;
-    if (isNaN(itemId as number)) return;
-    try {
-      await untagFaceInPhoto(itemId as number, userId);
-      // Update the tagModalImage locally so the UI reflects the removal instantly
-      setTagModalImage((prev: GalleryItem | null) => {
-        if (!prev) return prev;
-        return {
-          ...prev,
-          recognizedUsers: (prev.recognizedUsers || []).filter((u: any) => u.id !== userId),
-        };
-      });
-      // Also reload the full gallery in background
-      loadGallery();
-    } catch (err: any) {
-      setMessage({ type: 'error', text: err.message || 'Failed to remove tag.' });
-    }
-  };
-
   return (
     <div style={{ paddingBottom: '5rem' }}>
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-10" style={{ display: 'flex', flexWrap: 'wrap', gap: '1.5rem', marginBottom: '3rem' }}>
@@ -326,7 +288,7 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
           <p className="text-muted" style={{ fontSize: '1.1rem' }}>
             {viewMode === 'personal' && loggedInUser
               ? `Smart gallery showing photos matched to ${loggedInUser.name}.`
-              : 'Explore all community photos and identified profiles.'}
+              : 'Explore all community photos and identified profiles. To label unknown faces, use the People page.'}
           </p>
         </div>
 
@@ -375,46 +337,85 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
           )}
 
           <div className="flex gap-2" style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+            <div style={{ position: 'relative' }}>
+              <button
+                onClick={(e) => { e.stopPropagation(); setSyncMenuOpen(v => !v); }}
+                className="btn btn-outline"
+                disabled={refreshing}
+                style={{ padding: '0.75rem 1.15rem', borderRadius: '12px', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+                title="Background AI sync tools"
+              >
+                <RefreshCw size={18} style={{ animation: refreshing ? 'spin 1s linear infinite' : 'none' }} />
+                Sync
+                <ChevronDown size={16} />
+              </button>
+
+              {syncMenuOpen && (
+                <div
+                  onClick={(e) => e.stopPropagation()}
+                  style={{
+                    position: 'absolute',
+                    top: 'calc(100% + 10px)',
+                    left: 0,
+                    minWidth: 220,
+                    background: 'white',
+                    border: '1px solid var(--border-color)',
+                    borderRadius: 14,
+                    boxShadow: '0 18px 40px rgba(0,0,0,0.12)',
+                    padding: 8,
+                    zIndex: 50,
+                  }}
+                >
+                  <button
+                    className="btn"
+                    disabled={refreshing}
+                    onClick={() => handleRefreshRecognition(false)}
+                    style={{
+                      width: '100%',
+                      justifyContent: 'flex-start',
+                      padding: '10px 12px',
+                      borderRadius: 12,
+                      background: 'transparent',
+                      border: 'none',
+                      fontWeight: 800,
+                      cursor: refreshing ? 'not-allowed' : 'pointer',
+                    }}
+                  >
+                    <RefreshCw size={16} /> AI Sync (recommended)
+                  </button>
+                  <button
+                    className="btn"
+                    disabled={refreshing}
+                    onClick={() => {
+                      const ok = window.confirm('Force Rescan is slower and re-detects faces. Continue?');
+                      if (ok) handleRefreshRecognition(true);
+                      else setSyncMenuOpen(false);
+                    }}
+                    style={{
+                      width: '100%',
+                      justifyContent: 'flex-start',
+                      padding: '10px 12px',
+                      borderRadius: 12,
+                      background: 'rgba(245,158,11,0.08)',
+                      border: 'none',
+                      fontWeight: 900,
+                      color: '#b45309',
+                      cursor: refreshing ? 'not-allowed' : 'pointer',
+                    }}
+                    title="Advanced: clears caches and forces re-detection"
+                  >
+                    <RotateCcw size={16} /> Force Rescan (advanced)
+                  </button>
+                </div>
+              )}
+            </div>
 
             <button
-              onClick={() => handleRefreshRecognition(false)}
-              className="btn btn-outline"
-              disabled={refreshing}
-              title="Quick re-scan (uses cached face data)"
-              style={{ padding: '0.75rem 1.25rem', borderRadius: '12px', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
-            >
-              <RefreshCw size={18} style={{ animation: refreshing ? 'spin 1s linear infinite' : 'none' }} />
-              {refreshing ? 'Scanning...' : 'AI Sync'}
-            </button>
-
-            <button
-              onClick={() => handleRefreshRecognition(true)}
-              className="btn btn-outline"
-              disabled={refreshing}
-              title="Force full re-scan — clears all caches and re-detects every face with the latest AI model"
-              style={{
-                padding: '0.75rem 1.25rem', borderRadius: '12px',
-                display: 'flex', alignItems: 'center', gap: '0.5rem',
-                borderColor: '#f59e0b', color: '#d97706'
-              }}
-            >
-              <RotateCcw size={18} />
-              Force Rescan
-            </button>
-
-            <button
-              onClick={() => { setCameraMode('upload'); setShowCamera(true); }}
+              onClick={() => setShowCamera(true)}
               className="btn btn-outline"
               style={{ padding: '0.75rem 1.5rem', borderRadius: '12px' }}
             >
               <Camera size={20} /> Capture Photo
-            </button>
-            <button
-              onClick={() => { setCameraMode('identify'); setShowCamera(true); }}
-              className="btn btn-primary"
-              style={{ background: 'var(--accent)', borderColor: 'var(--accent)' }}
-            >
-              <Camera size={20} /> Identity Check
             </button>
             <label className="btn btn-primary" style={{ cursor: 'pointer', margin: 0 }}>
               <Plus size={20} /> Upload Files
@@ -445,7 +446,7 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
                 <div style={{ padding: '8px', background: 'rgba(99, 102, 241, 0.1)', borderRadius: '10px', color: 'var(--primary)' }}>
                   <ImageIcon size={20} />
                 </div>
-                <h3 style={{ margin: 0, fontWeight: 700 }}>{cameraMode === 'identify' ? 'Identity Recognition' : 'Take a Snap'}</h3>
+                <h3 style={{ margin: 0, fontWeight: 700 }}>Capture Photo</h3>
               </div>
               <button onClick={() => setShowCamera(false)} className="btn btn-danger" style={{ padding: '8px', borderRadius: '50%' }}>
                 <X size={20} />
@@ -494,7 +495,7 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
           </div>
           <h3 style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>No memories found here</h3>
           <p className="text-muted" style={{ maxWidth: '300px', margin: '0 auto' }}>
-            {viewMode === 'personal'
+            {viewMode === 'personal' && loggedInUser
               ? "You haven't been tagged in any photos yet. Upload some group photos to see the magic!"
               : "The global gallery is empty. Be the first to share a moment!"}
           </p>
@@ -637,26 +638,14 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
                       >
                          Preview
                       </button>
-                      {!img.isProfile && (
+                      {loggedInUser && !img.isProfile && (
                         <button
-                          onClick={(e) => { e.stopPropagation(); handleOpenTagModal(img, e); }}
-                          title="Tag a person in this photo"
-                          style={{
-                            background: 'rgba(99,102,241,0.85)',
-                            border: 'none',
-                            borderRadius: '8px',
-                            color: 'white',
-                            padding: '4px 9px',
-                            fontSize: '0.65rem',
-                            fontWeight: 800,
-                            cursor: 'pointer',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '4px',
-                            backdropFilter: 'blur(4px)'
-                          }}
+                          onClick={(e) => handleOpenHashtags(img, index, e)}
+                          className="btn"
+                          style={{ padding: '4px 9px', fontSize: '0.65rem', background: 'rgba(99,102,241,0.85)', color: 'white', fontWeight: 900, borderRadius: '10px' }}
+                          title="Add hashtags"
                         >
-                          <Tag size={11} /> Tag
+                          <Hash size={12} /> Tags
                         </button>
                       )}
                     </div>
@@ -686,235 +675,6 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
           {message.text}
         </motion.div>
       )}
-
-      {/* ===== TAG FACE MODAL ===== */}
-      <AnimatePresence>
-        {tagModalImage && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            style={{
-              position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh',
-              background: 'rgba(10,14,30,0.92)', backdropFilter: 'blur(16px)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 3000,
-            }}
-            onClick={handleCloseTagModal}
-          >
-            <motion.div
-              initial={{ scale: 0.9, opacity: 0, y: 20 }}
-              animate={{ scale: 1, opacity: 1, y: 0 }}
-              exit={{ scale: 0.9, opacity: 0 }}
-              transition={{ type: 'spring', stiffness: 300, damping: 25 }}
-              onClick={(e) => e.stopPropagation()}
-              style={{
-                background: 'linear-gradient(135deg, #1e1b4b 0%, #1a1a2e 100%)',
-                border: '1px solid rgba(99,102,241,0.3)',
-                borderRadius: '24px',
-                padding: '2rem',
-                width: '90%',
-                maxWidth: '580px',
-                maxHeight: '85vh',
-                overflowY: 'auto',
-                boxShadow: '0 25px 60px -15px rgba(0,0,0,0.7)',
-              }}
-            >
-              {/* Modal Header */}
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                  <div style={{ padding: '8px', background: 'rgba(99,102,241,0.2)', borderRadius: '10px' }}>
-                    <UserCheck size={20} style={{ color: '#818cf8' }} />
-                  </div>
-                  <div>
-                    <h3 style={{ margin: 0, color: 'white', fontWeight: 800, fontSize: '1.1rem' }}>Who is in this photo?</h3>
-                    <p style={{ margin: 0, color: 'rgba(255,255,255,0.45)', fontSize: '0.75rem' }}>Select a person to tag them</p>
-                  </div>
-                </div>
-                <button onClick={handleCloseTagModal} style={{ background: 'rgba(255,255,255,0.08)', border: 'none', borderRadius: '50%', width: '36px', height: '36px', color: 'white', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  <X size={18} />
-                </button>
-              </div>
-
-              {/* Photo Thumbnail — larger preview with interactive bounding boxes */}
-              <div style={{ marginBottom: '1.5rem', borderRadius: '16px', border: '1px solid rgba(255,255,255,0.08)', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.3)', minHeight: '150px' }}>
-                <div style={{ position: 'relative', display: 'inline-block' }}>
-                  <img 
-                    ref={imgRef}
-                    src={tagModalImage.url} 
-                    alt="Photo to tag" 
-                    onLoad={(e) => setImageNaturalSize({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })}
-                    style={{ maxWidth: '100%', maxHeight: '320px', objectFit: 'contain', display: 'block' }} 
-                  />
-                  {imageNaturalSize && tagModalImage.faces && tagModalImage.faces.length > 0 && tagModalImage.faces.map((face: any) => {
-                     const x = face.box._x ?? face.box.x;
-                     const y = face.box._y ?? face.box.y;
-                     const w = face.box._width ?? face.box.width;
-                     const h = face.box._height ?? face.box.height;
-                     
-                     const left = (x / imageNaturalSize.w) * 100;
-                     const top = (y / imageNaturalSize.h) * 100;
-                     const width = (w / imageNaturalSize.w) * 100;
-                     const height = (h / imageNaturalSize.h) * 100;
-                     
-                     const isSelected = tagSelectedFaceIndex === face.index;
-                     const hasTag = face.manuallyTaggedUserId !== undefined && face.manuallyTaggedUserId !== null;
-                     
-                     return (
-                        <div
-                          key={face.index}
-                          onClick={() => setTagSelectedFaceIndex(isSelected ? null : face.index)}
-                          title={hasTag ? "Already tagged explicitly" : "Click to tag this exact face"}
-                          style={{
-                            position: 'absolute',
-                            left: `${left}%`, top: `${top}%`, width: `${width}%`, height: `${height}%`,
-                            border: isSelected ? '3px solid #6366f1' : hasTag ? '2px solid rgba(255,255,255,0.3)' : '2px dashed #f59e0b',
-                            background: isSelected ? 'rgba(99,102,241,0.25)' : 'transparent',
-                            cursor: 'pointer',
-                            borderRadius: '4px',
-                            transition: 'all 0.2s ease',
-                            boxShadow: isSelected ? '0 0 0 9999px rgba(0,0,0,0.4)' : 'none',
-                            zIndex: isSelected ? 10 : 1
-                          }}
-                        />
-                     );
-                  })}
-                  {(!tagModalImage.faces || tagModalImage.faces.length === 0) && (
-                    <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.5)', borderRadius: '16px', color: 'white', fontWeight: 600, flexDirection: 'column', gap: '8px' }}>
-                      <span style={{ fontSize: '1.2rem' }}>⚠️ AI Could Not Detect Any Faces</span>
-                      <span style={{ fontSize: '0.8rem', color: 'rgba(255,255,255,0.7)' }}>This image format might be unsupported or faces are too blurry.</span>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Already Tagged — with × remove button to fix wrong AI tags */}
-              {tagModalImage.recognizedUsers && tagModalImage.recognizedUsers.length > 0 && (
-                <div style={{ marginBottom: '1rem' }}>
-                  <p style={{ color: 'rgba(255,255,255,0.45)', fontSize: '0.7rem', fontWeight: 700, marginBottom: '0.5rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Tagged People <span style={{ color: 'rgba(255,255,255,0.3)', fontWeight: 400, textTransform: 'none' }}>— click × to remove wrong tag</span></p>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
-                    {tagModalImage.recognizedUsers.map((u: any) => (
-                      <span
-                        key={u.id}
-                        style={{
-                          background: 'rgba(99,102,241,0.15)',
-                          border: '1px solid rgba(99,102,241,0.35)',
-                          borderRadius: '999px',
-                          padding: '4px 6px 4px 12px',
-                          fontSize: '0.8rem',
-                          color: '#a5b4fc',
-                          fontWeight: 600,
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '6px',
-                        }}
-                      >
-                        ✓ {u.name}
-                        <button
-                          onClick={(e) => handleRemoveTag(tagModalImage, u.id, e)}
-                          title={`Remove ${u.name} from this photo`}
-                          style={{
-                            background: 'rgba(239,68,68,0.25)',
-                            border: '1px solid rgba(239,68,68,0.4)',
-                            borderRadius: '50%',
-                            width: '18px',
-                            height: '18px',
-                            color: '#fca5a5',
-                            cursor: 'pointer',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            padding: 0,
-                            flexShrink: 0,
-                          }}
-                        >
-                          <X size={10} />
-                        </button>
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* User Selection Grid */}
-              <p style={{ color: 'rgba(255,255,255,0.45)', fontSize: '0.7rem', fontWeight: 700, marginBottom: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Select a Person</p>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: '0.75rem', marginBottom: '1.5rem' }}>
-                {allUsers.map((user: any) => {
-                  const isSelected = tagSelectedUserId === user.id;
-                  const alreadyTagged = tagModalImage.recognizedUsers?.some((u: any) => u.id === user.id);
-                  return (
-                    <button
-                      key={user.id}
-                      disabled={alreadyTagged}
-                      onClick={() => setTagSelectedUserId(isSelected ? null : user.id)}
-                      style={{
-                        background: isSelected ? 'rgba(99,102,241,0.3)' : alreadyTagged ? 'rgba(255,255,255,0.03)' : 'rgba(255,255,255,0.06)',
-                        border: isSelected ? '2px solid #6366f1' : alreadyTagged ? '2px solid rgba(99,102,241,0.2)' : '2px solid rgba(255,255,255,0.08)',
-                        borderRadius: '16px',
-                        padding: '1rem 0.75rem',
-                        cursor: alreadyTagged ? 'not-allowed' : 'pointer',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        alignItems: 'center',
-                        gap: '0.5rem',
-                        transition: 'all 0.15s ease',
-                        opacity: alreadyTagged ? 0.45 : 1,
-                      }}
-                    >
-                      <div style={{ width: '48px', height: '48px', borderRadius: '50%', overflow: 'hidden', border: isSelected ? '2px solid #6366f1' : '2px solid rgba(255,255,255,0.15)', flexShrink: 0 }}>
-                        <img
-                          src={user.profilePicture || user['profile picture'] || `https://ui-avatars.com/api/?name=${encodeURIComponent(user.name)}&background=6366f1&color=fff&bold=true`}
-                          alt={user.name}
-                          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                        />
-                      </div>
-                      <span style={{ color: isSelected ? '#c7d2fe' : 'rgba(255,255,255,0.7)', fontSize: '0.75rem', fontWeight: 700, textAlign: 'center', wordBreak: 'break-word' }}>
-                        {user.name.split(' ')[0]}
-                        {alreadyTagged && <span style={{ display: 'block', fontSize: '0.6rem', color: '#818cf8' }}>✓ tagged</span>}
-                      </span>
-                      {isSelected && (
-                        <div style={{ position: 'absolute', top: '6px', right: '6px' }}>
-                          <CheckCircle2 size={14} style={{ color: '#818cf8' }} />
-                        </div>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-
-              {/* Action Buttons */}
-              <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
-                <button onClick={handleCloseTagModal} style={{ padding: '0.6rem 1.4rem', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.12)', background: 'transparent', color: 'rgba(255,255,255,0.6)', fontWeight: 600, cursor: 'pointer', fontSize: '0.9rem' }}>
-                  Cancel
-                </button>
-                <button
-                  onClick={handleConfirmTag}
-                  disabled={!tagSelectedUserId || tagging}
-                  style={{
-                    padding: '0.6rem 1.6rem',
-                    borderRadius: '10px',
-                    border: 'none',
-                    background: tagSelectedUserId && !tagging ? 'linear-gradient(135deg, #6366f1, #8b5cf6)' : 'rgba(99,102,241,0.3)',
-                    color: 'white',
-                    fontWeight: 700,
-                    cursor: tagSelectedUserId && !tagging ? 'pointer' : 'not-allowed',
-                    fontSize: '0.9rem',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '0.5rem',
-                    transition: 'all 0.2s ease',
-                  }}
-                >
-                  {tagging ? (
-                    <><div className="loading-spinner" style={{ width: '14px', height: '14px', borderTopColor: 'white', borderWidth: '2px' }} /> Tagging...</>
-                  ) : (
-                    <><Tag size={15} /> Confirm Tag</>
-                  )}
-                </button>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
 
       {/* ===== EXISTING FULL-SCREEN PREVIEW MODAL ===== */}
       <AnimatePresence>
@@ -1040,6 +800,105 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
                     <span style={{ color: 'white', opacity: 0.4, fontStyle: 'italic' }}>No faces identified yet</span>
                   )}
                 </div>
+              </div>
+
+              <div style={{
+                background: 'rgba(255, 255, 255, 0.05)',
+                backdropFilter: 'blur(20px)',
+                padding: '1rem 1.5rem',
+                borderRadius: '22px',
+                border: '1px solid rgba(255,255,255,0.1)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '1rem',
+                width: 'min(900px, 95vw)',
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'white', opacity: 0.7, fontWeight: 800 }}>
+                    <Hash size={18} /> Hashtags:
+                  </div>
+                  {(selectedImage.hashtags && selectedImage.hashtags.length > 0) ? (
+                    selectedImage.hashtags.map((t) => (
+                      <button
+                        key={t}
+                        onClick={() => navigate(`/tags/${encodeURIComponent(t)}`)}
+                        className="btn"
+                        style={{
+                          padding: '6px 10px',
+                          borderRadius: '999px',
+                          background: 'rgba(0,0,0,0.35)',
+                          border: '1px solid rgba(255,255,255,0.16)',
+                          color: 'white',
+                          fontSize: '0.85rem',
+                          fontWeight: 900,
+                          cursor: 'pointer',
+                        }}
+                        title="Search this tag"
+                      >
+                        #{t}
+                      </button>
+                    ))
+                  ) : (
+                    <span style={{ color: 'white', opacity: 0.45, fontStyle: 'italic' }}>No hashtags</span>
+                  )}
+                </div>
+
+                {loggedInUser && !selectedImage.isProfile && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    {!editingHashtags ? (
+                      <button
+                        onClick={() => setEditingHashtags(true)}
+                        className="btn"
+                        style={{
+                          padding: '8px 12px',
+                          borderRadius: '12px',
+                          background: 'rgba(99,102,241,0.25)',
+                          border: '1px solid rgba(99,102,241,0.35)',
+                          color: 'white',
+                          fontWeight: 900,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Add / Edit
+                      </button>
+                    ) : (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <input
+                          value={hashtagsDraft}
+                          onChange={(e) => setHashtagsDraft(e.target.value)}
+                          placeholder="#wedding #party"
+                          style={{
+                            width: 260,
+                            padding: '0.55rem 0.75rem',
+                            borderRadius: 12,
+                            border: '1px solid rgba(255,255,255,0.18)',
+                            background: 'rgba(0,0,0,0.35)',
+                            color: 'white',
+                            outline: 'none',
+                          }}
+                        />
+                        <button
+                          onClick={() => { setEditingHashtags(false); setHashtagsDraft((selectedImage.hashtags || []).map(t => `#${t}`).join(' ')); }}
+                          className="btn"
+                          style={{ padding: '8px 10px', borderRadius: 12, background: 'transparent', border: '1px solid rgba(255,255,255,0.14)', color: 'white' }}
+                          disabled={savingHashtags}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          onClick={handleSaveHashtags}
+                          className="btn"
+                          style={{ padding: '8px 12px', borderRadius: 12, background: 'rgba(99,102,241,0.95)', border: 'none', color: 'white', fontWeight: 950 }}
+                          disabled={savingHashtags}
+                          title={parsedHashtagsDraft.length === 0 ? 'Save empty to clear tags' : 'Save hashtags'}
+                        >
+                          {savingHashtags ? 'Savingâ€¦' : 'Save'}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </motion.div>
           </motion.div>

@@ -13,6 +13,7 @@ interface GalleryItem {
   isProfile: boolean;
   userId?: number | null;
   recognizedUserIds: number[];
+  hashtags: string[];
   faceDescriptors?: any | null;
 }
 
@@ -44,6 +45,7 @@ function toGalleryResponse(item: GalleryItem & { recognizedUsers?: any[] }) {
     isProfile: item.isProfile,
     userId: item.userId,
     recognizedUserIds: item.recognizedUserIds || [],
+    hashtags: Array.isArray(item.hashtags) ? item.hashtags : [],
     faces: Array.isArray(item.faceDescriptors) 
       ? item.faceDescriptors.map((f: any, i: number) => ({
           index: i,

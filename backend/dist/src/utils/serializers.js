@@ -28,6 +28,14 @@ function toGalleryResponse(item) {
         isProfile: item.isProfile,
         userId: item.userId,
         recognizedUserIds: item.recognizedUserIds || [],
+        hashtags: Array.isArray(item.hashtags) ? item.hashtags : [],
+        faces: Array.isArray(item.faceDescriptors)
+            ? item.faceDescriptors.map((f, i) => ({
+                index: i,
+                box: f.box,
+                manuallyTaggedUserId: f.manuallyTaggedUserId
+            }))
+            : [],
         // Enrich recognizedUsers with profilePicture so UI avatars work in tags
         recognizedUsers: (item.recognizedUsers || []).map((u) => ({
             id: u.id,

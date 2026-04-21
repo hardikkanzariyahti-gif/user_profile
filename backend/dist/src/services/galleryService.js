@@ -36,18 +36,50 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.galleryService = void 0;
+exports.galleryService = exports.LabeledFaceDescriptors = void 0;
 exports.buildLabeledDescriptors = buildLabeledDescriptors;
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
-const faceApiLib = __importStar(require("@vladmandic/face-api"));
 const faceAi_1 = __importDefault(require("../../faceAi"));
 const constants_1 = require("../config/constants");
 const galleryRepository_1 = __importDefault(require("../repositories/galleryRepository"));
 const userRepository_1 = __importDefault(require("../repositories/userRepository"));
 const serializers_1 = require("../utils/serializers");
 const httpError_1 = __importDefault(require("../utils/httpError"));
-const userService_1 = __importDefault(require("./userService"));
+const urlUtils_1 = require("../utils/urlUtils");
+const hashtagUtils_1 = require("../utils/hashtagUtils");
+async function getGalleryItemResponseById(id) {
+    const [item, allUsers] = await Promise.all([
+        galleryRepository_1.default.findById(id),
+        userRepository_1.default.findAllForRecognition(),
+    ]);
+    if (!item)
+        throw (0, httpError_1.default)(404, 'Gallery item not found');
+    const userMap = {};
+    for (const u of allUsers)
+        userMap[u.id] = u;
+    const enriched = {
+        ...item,
+        recognizedUsers: (Array.isArray(item.recognizedUserIds) ? item.recognizedUserIds : [])
+            .map((uid) => userMap[Number(uid)])
+            .filter(Boolean),
+    };
+    return (0, serializers_1.toGalleryResponse)(enriched);
+}
+async function getUsersMap() {
+    const allUsers = await userRepository_1.default.findAllForRecognition();
+    const userMap = {};
+    for (const u of allUsers)
+        userMap[u.id] = u;
+    return userMap;
+}
+class LabeledFaceDescriptors {
+    constructor(label, descriptors) {
+        this.label = label;
+        this.descriptors = descriptors;
+    }
+}
+exports.LabeledFaceDescriptors = LabeledFaceDescriptors;
 // ─── In-Memory Model Cache ────────────────────────────────────────────────────
 // buildLabeledDescriptors is expensive (reads all gallery items + runs AI scans).
 // Cache the result in memory for MODEL_CACHE_TTL_MS to avoid rebuilding on every
@@ -147,6 +179,28 @@ async function buildLabeledDescriptors(users) {
                 Array.isArray(item.recognizedUserIds) &&
                 item.recognizedUserIds.map(id => Number(id)).includes(Number(user.id)));
             for (const item of taggedPhotos.slice(0, 8)) {
+                // Exact Face-to-ID fallback
+                let foundExplicit = false;
+                if (Array.isArray(item.faceDescriptors)) {
+                    const faceDescs = item.faceDescriptors;
+                    const explicitFaces = faceDescs.filter(d => d && Number(d.manuallyTaggedUserId) === Number(user.id));
+                    if (explicitFaces.length > 0) {
+                        for (const d of explicitFaces) {
+                            if (d && d.descriptor) {
+                                const deserialized = faceAi_1.default.deserializeDescriptor(d.descriptor);
+                                if (deserialized)
+                                    descriptors.push(deserialized);
+                            }
+                        }
+                        foundExplicit = true;
+                    }
+                }
+                if (foundExplicit) {
+                    if (descriptors.length >= 3)
+                        break;
+                    continue;
+                }
+                // Generic fallback for backwards compatibility
                 const detections = await detectFacesWithCache(item);
                 for (const d of detections) {
                     descriptors.push(d.descriptor);
@@ -163,29 +217,44 @@ async function buildLabeledDescriptors(users) {
             console.log(`[AI Model] ⚠️  No face data for ${user.name} — skip`);
             return null;
         }
-        if (!descriptors.includes(groundTruth))
+        if (!descriptors.some(d => faceAi_1.default.euclideanDistance(d, groundTruth) < 0.01)) {
             descriptors.push(groundTruth);
+        }
         // Step 3: Collect additional confirmed training samples (better accuracy)
         const confirmedPhotos = allGalleryItems.filter(item => !item.isProfile &&
             Array.isArray(item.recognizedUserIds) &&
             item.recognizedUserIds.map(id => Number(id)).includes(Number(user.id)));
-        for (const item of confirmedPhotos.slice(0, 10)) {
+        for (const item of confirmedPhotos.slice(0, 30)) {
+            // Check for explicitly tagged face first
+            if (Array.isArray(item.faceDescriptors)) {
+                const faceDescs = item.faceDescriptors;
+                const explicitFace = faceDescs.find(d => d && Number(d.manuallyTaggedUserId) === Number(user.id));
+                if (explicitFace && explicitFace.descriptor) {
+                    const deserialized = faceAi_1.default.deserializeDescriptor(explicitFace.descriptor);
+                    if (deserialized && !descriptors.includes(deserialized)) {
+                        descriptors.push(deserialized);
+                        continue; // Skip generic fallback distance check
+                    }
+                }
+            }
             const detections = await detectFacesWithCache(item);
             // Pick the detection closest to ground truth (reject wrong faces from group shots)
             let best = null;
             let bestDist = Infinity;
             for (const det of detections) {
                 const dist = faceAi_1.default.euclideanDistance(groundTruth, det.descriptor);
-                if (dist < bestDist && dist < 0.45) {
+                // Professional limit for memorizing diverse profile angles (0.68)
+                if (dist < bestDist && dist < 0.68) {
                     bestDist = dist;
                     best = det.descriptor;
                 }
             }
-            if (best && !descriptors.includes(best))
+            if (best && !descriptors.some(d => faceAi_1.default.euclideanDistance(d, best) < 0.01)) {
                 descriptors.push(best);
+            }
         }
         console.log(`[AI Model] ✅ ${user.name} — ${descriptors.length} descriptor(s)`);
-        return new faceApiLib.LabeledFaceDescriptors(JSON.stringify({ id: user.id, name: user.name }), descriptors);
+        return new LabeledFaceDescriptors(JSON.stringify({ id: user.id, name: user.name }), descriptors);
     }));
     const model = results.filter((r) => r !== null);
     console.log(`[AI Model] 🎯 Built for ${model.length} user(s)`);
@@ -248,7 +317,7 @@ const galleryService = {
         // Filter for personal view
         let visibleItems = uniqueItems;
         if (userId !== null && userId !== undefined) {
-            const normalizedUserId = userService_1.default.normalizeUserId(userId);
+            const normalizedUserId = Number(userId);
             visibleItems = uniqueItems.filter((item) => {
                 const ownerId = item.userId != null ? Number(item.userId) : null;
                 const recIds = Array.isArray(item.recognizedUserIds)
@@ -259,6 +328,35 @@ const galleryService = {
         }
         // Enrich with user data (name + profilePicture)
         const enriched = visibleItems.map((item) => ({
+            ...item,
+            recognizedUsers: (Array.isArray(item.recognizedUserIds) ? item.recognizedUserIds : [])
+                .map((id) => userMap[Number(id)])
+                .filter(Boolean),
+        }));
+        return enriched.map(serializers_1.toGalleryResponse);
+    },
+    async getGalleryItem(id) {
+        return getGalleryItemResponseById(id);
+    },
+    async setGalleryItemHashtags(id, hashtagsInput) {
+        const item = await galleryRepository_1.default.findById(id);
+        if (!item)
+            throw (0, httpError_1.default)(404, 'Gallery item not found');
+        if (item.isProfile)
+            throw (0, httpError_1.default)(400, 'Cannot tag a profile item.');
+        const hashtags = (0, hashtagUtils_1.normalizeHashtags)(hashtagsInput);
+        await galleryRepository_1.default.updateById(id, { hashtags });
+        return getGalleryItemResponseById(id);
+    },
+    async searchGalleryByHashtag(rawTag) {
+        const tag = (0, hashtagUtils_1.normalizeTag)(rawTag);
+        if (!tag)
+            throw (0, httpError_1.default)(400, 'Valid hashtag is required.');
+        const [items, userMap] = await Promise.all([
+            galleryRepository_1.default.findByHashtag(tag),
+            getUsersMap(),
+        ]);
+        const enriched = items.map((item) => ({
             ...item,
             recognizedUsers: (Array.isArray(item.recognizedUserIds) ? item.recognizedUserIds : [])
                 .map((id) => userMap[Number(id)])
@@ -292,7 +390,7 @@ const galleryService = {
                     .filter((id) => id !== null);
             }
             return {
-                url: userService_1.default.buildUploadUrl(file.filename),
+                url: (0, urlUtils_1.buildUploadUrl)(file.filename),
                 uploadedAt: new Date(),
                 recognizedUserIds: [...new Set(recognizedUserIds)],
                 userId: uploaderId,
@@ -313,7 +411,7 @@ const galleryService = {
      * - Invalidates in-memory model cache (model must be rebuilt with new training data)
      * - Triggers background refresh to propagate recognition to other photos
      */
-    async tagUnknownFace(galleryItemId, userId) {
+    async tagUnknownFace(galleryItemId, userId, faceIndex) {
         const [allItems, user] = await Promise.all([
             galleryRepository_1.default.findAll(),
             userRepository_1.default.findById(userId),
@@ -324,25 +422,31 @@ const galleryService = {
         if (item.isProfile)
             throw new Error('Cannot tag a profile photo directly.');
         const existingIds = (Array.isArray(item.recognizedUserIds)
-            ? item.recognizedUserIds.map(id => Number(id))
+            ? item.recognizedUserIds.map((id) => Number(id))
             : []);
-        // Add tag if not already present
+        let updateData = {};
         if (!existingIds.includes(Number(userId))) {
-            await galleryRepository_1.default.updateById(galleryItemId, {
-                recognizedUserIds: [...existingIds, Number(userId)],
-            });
+            updateData.recognizedUserIds = [...existingIds, Number(userId)];
         }
-        // Auto-set profile picture if user has none
+        if (faceIndex !== undefined && Array.isArray(item.faceDescriptors)) {
+            const newDescriptors = [...item.faceDescriptors];
+            if (newDescriptors[faceIndex]) {
+                newDescriptors[faceIndex].manuallyTaggedUserId = Number(userId);
+                updateData.faceDescriptors = newDescriptors;
+            }
+        }
+        else if (faceIndex === undefined) {
+            // Old generic tag behaviour: clear cache so next sync recomputes
+            updateData.faceDescriptors = null;
+        }
+        await galleryRepository_1.default.updateById(galleryItemId, updateData);
         const profilePictureSet = !user.profile_picture;
         if (profilePictureSet && item.url) {
             await userRepository_1.default.updateById(userId, {
                 profile_picture: item.url,
                 profileDescriptor: null, // Force re-calculation
             });
-            console.log(`[Tag] 📸 Auto-set profile picture for ${user.name}`);
         }
-        // Clear this item's face cache → next sync re-detects with current model
-        await galleryRepository_1.default.updateById(galleryItemId, { faceDescriptors: null });
         // Invalidate in-memory model so background refresh uses fresh training data
         invalidateModelCache();
         // Background refresh: propagates the new tag to recognise this person elsewhere
@@ -350,17 +454,43 @@ const galleryService = {
         return { message: `Tagged ${user.name} successfully`, profilePictureSet };
     },
     // ── Untag a face ────────────────────────────────────────────────────────────
-    async untagFace(galleryItemId, userId) {
+    async untagFace(galleryItemId, userId, faceIndex) {
         const allItems = await galleryRepository_1.default.findAll();
         const item = allItems.find(i => i.id === galleryItemId);
         if (!item)
             throw new Error('Item not found');
         const existingIds = (Array.isArray(item.recognizedUserIds)
-            ? item.recognizedUserIds.map(id => Number(id))
+            ? item.recognizedUserIds.map((id) => Number(id))
             : []);
-        await galleryRepository_1.default.updateById(galleryItemId, {
+        let updateData = {
             recognizedUserIds: existingIds.filter(id => id !== Number(userId)),
-        });
+        };
+        if (faceIndex !== undefined && Array.isArray(item.faceDescriptors)) {
+            const newDescriptors = [...item.faceDescriptors];
+            if (newDescriptors[faceIndex] && Number(newDescriptors[faceIndex].manuallyTaggedUserId) === Number(userId)) {
+                newDescriptors[faceIndex].manuallyTaggedUserId = null;
+            }
+            if (!newDescriptors[faceIndex].rejectedUserIds)
+                newDescriptors[faceIndex].rejectedUserIds = [];
+            newDescriptors[faceIndex].rejectedUserIds.push(Number(userId));
+            updateData.faceDescriptors = newDescriptors;
+        }
+        else if (Array.isArray(item.faceDescriptors)) {
+            // Global untag from the whole photo (happens when clicking X on the tag)
+            // Add this user to rejected lists for ALL faces in this photo so AI doesn't re-tag them!
+            const newDescriptors = [...item.faceDescriptors];
+            for (const d of newDescriptors) {
+                if (d) {
+                    if (Number(d.manuallyTaggedUserId) === Number(userId))
+                        d.manuallyTaggedUserId = null;
+                    if (!d.rejectedUserIds)
+                        d.rejectedUserIds = [];
+                    d.rejectedUserIds.push(Number(userId));
+                }
+            }
+            updateData.faceDescriptors = newDescriptors;
+        }
+        await galleryRepository_1.default.updateById(galleryItemId, updateData);
         invalidateModelCache();
         this.refreshGalleryRecognition().catch(err => console.error('[Untag] BG refresh failed:', err));
         return { message: 'Tag removed successfully' };
@@ -376,28 +506,39 @@ const galleryService = {
      *                     detector re-processes every photo from scratch.
      *                     Essential after detection logic changes.
      */
+    syncState: { isScanning: false, total: 0, current: 0 },
     async refreshGalleryRecognition(forceRescan = false) {
+        if (this.syncState.isScanning) {
+            console.log('⚠️ AI Sync already running, ignoring parallel request.');
+            return { message: 'Sync in progress' };
+        }
+        this.syncState = { isScanning: true, total: 0, current: 0 };
         console.log(`\n🚀 AI Sync starting... (forceRescan=${forceRescan})`);
         const startTime = Date.now();
         let allItems = await galleryRepository_1.default.findAll();
-        // Force rescan: wipe all cached descriptors → fresh AI detection on every photo
+        // Intelligent Force Rescan (~0 seconds):
+        // We only wipe cached faceDescriptors for photos that previously FAILED to detect any faces.
+        // Photos that already have bounding boxes skip the heavy image processing, meaning 1,000s of photos 
+        // finish recalculating identities instantly instead of waiting 30+ minutes!
         if (forceRescan) {
-            console.log('[AI Sync] ⚠️  Force rescan — clearing descriptor caches...');
-            const toWipe = allItems.filter(i => !i.isProfile && i.url);
+            console.log('[AI Sync] ✨ Intelligent Force rescan — clearing descriptor caches ONLY for missed faces...');
+            const toWipe = allItems.filter(i => !i.isProfile &&
+                i.url &&
+                (Array.isArray(i.faceDescriptors) ? i.faceDescriptors.length === 0 : true));
             await Promise.all(toWipe.map(item => galleryRepository_1.default.updateById(item.id, { faceDescriptors: null }).catch(() => { })));
-            allItems = await galleryRepository_1.default.findAll(); // Reload with cleared caches
-            console.log(`[AI Sync] ✅ Cleared ${toWipe.length} item cache(s)`);
+            allItems = await galleryRepository_1.default.findAll();
+            console.log(`[AI Sync] ✅ Scheduled heavy re-scan only for ${toWipe.length} item(s)`);
         }
         // Build (or restore from cache) the recognition model
         // Force a fresh model build (don't reuse cached model during a refresh)
         invalidateModelCache();
         const labeledDescriptors = await getCachedModel();
         if (labeledDescriptors.length === 0) {
-            console.log('[AI Sync] ⚠️  No users in model — nothing to recognize. Aborting.');
-            return { updatedCount: 0, total: allItems.length };
+            console.log('[AI Sync] ⚠️  No users in model — skipping Auto-Identification, but running AI Detection to draw face boxes for Manual Tagging.');
         }
         let updatedCount = 0;
         const realItems = allItems.filter(i => !i.isProfile && i.url);
+        this.syncState.total = realItems.length;
         console.log(`[AI Sync] Scanning ${realItems.length} photos with ${labeledDescriptors.length} known user(s)...\n`);
         // Process in batches of 3 (balance speed vs CPU)
         const CHUNK = 3;
@@ -408,16 +549,26 @@ const galleryService = {
                 const existingIds = (Array.isArray(item.recognizedUserIds)
                     ? item.recognizedUserIds.map(id => Number(id))
                     : []).sort((a, b) => a - b);
-                // Detect faces (uses cache or re-scans)
+                // Detect faces (creates new bounding boxes and Apple-Vectors, enabling Manual Tagging!)
                 const detections = await detectFacesWithCache(item);
                 console.log(`  Item ${item.id}: ${detections.length} face(s) detected`);
+                // Skip Identification if no users
+                if (labeledDescriptors.length === 0)
+                    return;
                 // Identify each detected face
                 const aiIds = detections
-                    .map(det => {
+                    .map((det, i) => {
+                    const faceDescs = item.faceDescriptors;
+                    const cachedFace = Array.isArray(faceDescs) ? faceDescs[i] : null;
+                    const rejectedIds = cachedFace?.rejectedUserIds || [];
                     const match = faceAi_1.default.findBestMatchWithMargin(det.descriptor, labeledDescriptors);
                     if (match.label === 'unknown')
                         return null;
                     const id = parseUserId(match.label);
+                    if (id !== null && rejectedIds.includes(id)) {
+                        console.log(`    → AI returned user ${id}, but skipping because it was manually rejected!`);
+                        return null;
+                    }
                     if (id !== null)
                         console.log(`    → matched user ${id} (dist=${match.distance?.toFixed(3)})`);
                     return id;
@@ -432,10 +583,119 @@ const galleryService = {
                     console.log(`  ✅ Item ${item.id}: added [${added.join(', ')}]`);
                 }
             }));
+            this.syncState.current += chunk.length;
+            // CRITICAL: Yield the event loop to Node so the API doesn't freeze under load
+            await new Promise(resolve => setTimeout(resolve, 50));
         }
-        const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-        console.log(`\n✅ AI Sync done in ${elapsed}s — updated ${updatedCount}/${realItems.length} photos.\n`);
-        return { updatedCount, total: realItems.length };
+        const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+        console.log(`\n✅ AI Sync done in ${duration}s — updated ${updatedCount}/${realItems.length} photos.\n`);
+        this.syncState.isScanning = false;
+        return { updatedCount, total: realItems.length, durationSc: duration };
+    },
+    // ── People Clustering ────────────────────────────────────────────────────────
+    async getUnknownFaceClusters() {
+        console.log('[Clustering] Analyzing gallery for unknown people...');
+        const allItems = await galleryRepository_1.default.findAll();
+        const labeledDescriptors = await getCachedModel();
+        let unknownFaces = [];
+        // Find all faces that couldn't be matched by the AI and lack a manual tag
+        for (const item of allItems) {
+            if (!Array.isArray(item.faceDescriptors))
+                continue;
+            const faceDescs = item.faceDescriptors;
+            for (let i = 0; i < faceDescs.length; i++) {
+                const d = faceDescs[i];
+                if (d && d.descriptor && !d.manuallyTaggedUserId) {
+                    const descriptor = faceAi_1.default.deserializeDescriptor(d.descriptor);
+                    if (!descriptor)
+                        continue;
+                    const match = faceAi_1.default.findBestMatchWithMargin(descriptor, labeledDescriptors);
+                    if (match.label === 'unknown') {
+                        // PRO IMPROVEMENT: If the face is "unknown" (>0.55) but still somewhat close to a known person (<0.75),
+                        // hide it from discovery. It's likely just a profile view of a known user and would clutter the page.
+                        if (match.distance !== null && match.distance < 0.75) {
+                            console.log(`[Clustering] Skipping likely-known face (dist ${match.distance.toFixed(3)} to ${match.candidate})`);
+                            continue;
+                        }
+                        unknownFaces.push({
+                            itemUrl: (0, urlUtils_1.buildUploadUrl)(item.url?.split('/').pop() || ''),
+                            itemId: item.id,
+                            faceIndex: i,
+                            box: d.box,
+                            descriptor: new Float32Array(d.descriptor)
+                        });
+                    }
+                }
+            }
+        }
+        // Cluster them! (Groups identical unknown people together perfectly using Facenet Euclidean distances)
+        // Threshold 1.40 is more lenient, allowing different angles of the same person to group properly.
+        const CLUSTER_THRESHOLD = 1.40;
+        const clusters = [];
+        for (const face of unknownFaces) {
+            let merged = false;
+            for (const cluster of clusters) {
+                // Compare new face against the cluster's main anchor face
+                const anchor = cluster.faces[0].descriptor;
+                if (faceAi_1.default.euclideanDistance(anchor, face.descriptor) < CLUSTER_THRESHOLD) {
+                    cluster.faces.push(face);
+                    merged = true;
+                    break;
+                }
+            }
+            if (!merged) {
+                clusters.push({
+                    clusterId: `cluster-${face.itemId}-${face.faceIndex}`,
+                    faces: [face]
+                });
+            }
+        }
+        // Clean up responses so frontend can render them immediately (we drop the big Float32Arrays)
+        const cleanedClusters = clusters
+            .filter(c => c.faces.length > 0)
+            .sort((a, b) => b.faces.length - a.faces.length) // Show most frequently occurring strangers first
+            .map(c => ({
+            clusterId: c.clusterId,
+            faceCount: c.faces.length,
+            anchorImage: c.faces[0].itemUrl, // Using the first face as the master thumbnail
+            anchorBox: c.faces[0].box,
+            relatedPhotos: c.faces.map((f) => ({
+                itemId: f.itemId,
+                faceIndex: f.faceIndex,
+                url: f.itemUrl,
+                box: f.box
+            }))
+        }));
+        console.log(`[Clustering] Found ${unknownFaces.length} unknown faces and grouped them into ${cleanedClusters.length} beautiful clusters.`);
+        return cleanedClusters;
+    },
+    async mergeClusterFaces(userId, faces) {
+        const allItems = await galleryRepository_1.default.findAll();
+        let updateCount = 0;
+        for (const face of faces) {
+            const item = allItems.find(i => i.id === face.itemId);
+            if (!item)
+                continue;
+            let updateData = {};
+            const existingIds = Array.isArray(item.recognizedUserIds) ? item.recognizedUserIds.map((id) => Number(id)) : [];
+            if (!existingIds.includes(userId)) {
+                updateData.recognizedUserIds = [...existingIds, userId];
+            }
+            if (Array.isArray(item.faceDescriptors)) {
+                const newDescriptors = [...item.faceDescriptors];
+                if (newDescriptors[face.faceIndex]) {
+                    newDescriptors[face.faceIndex].manuallyTaggedUserId = userId;
+                    updateData.faceDescriptors = newDescriptors;
+                }
+            }
+            if (Object.keys(updateData).length > 0) {
+                await galleryRepository_1.default.updateById(item.id, updateData);
+                updateCount++;
+            }
+        }
+        invalidateModelCache();
+        this.refreshGalleryRecognition().catch(err => console.error('[Merge] BG refresh failed:', err));
+        return { message: `Successfully matched person to ${updateCount} unknown photo(s).`, updatedCount: updateCount };
     },
 };
 exports.galleryService = galleryService;

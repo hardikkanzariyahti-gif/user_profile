@@ -8,6 +8,8 @@ import Login from './pages/Login';
 import Albums from './pages/MyAlbums';
 import AlbumDetail from './pages/AlbumDetail';
 import SharedAlbum from './pages/SharedAlbum';
+import Search from './pages/Search';
+import TagResults from './pages/TagResults';
 
 interface UserProfile {
   id: number;
@@ -34,6 +36,9 @@ const Navigation: React.FC<NavigationProps> = ({ loggedInUser }) => {
       </Link>
       <Link to="/people" className={`nav-link ${location.pathname === '/people' ? 'active' : ''}`}>
         People
+      </Link>
+      <Link to="/search" className={`nav-link ${location.pathname === '/search' || location.pathname.startsWith('/tags/') ? 'active' : ''}`}>
+        Search
       </Link>
       {loggedInUser && (
         <Link to="/albums" className={`nav-link ${location.pathname.startsWith('/albums') ? 'active' : ''}`}>
@@ -116,6 +121,8 @@ function App() {
           <Route path="/update/:id" element={<ProfileForm mode="update" />} />
           <Route path="/gallery" element={<Gallery loggedInUser={loggedInUser} />} />
           <Route path="/people" element={<People />} />
+          <Route path="/search" element={<Search />} />
+          <Route path="/tags/:tag" element={<TagResults />} />
           <Route path="/albums" element={<Albums loggedInUser={loggedInUser} />} />
           <Route path="/albums/:id" element={<AlbumDetail loggedInUser={loggedInUser} />} />
           <Route path="/s/:shareId" element={<SharedAlbum />} />

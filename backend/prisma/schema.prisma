@@ -32,6 +32,7 @@ model GalleryItem {
   isProfile         Boolean  @default(false)
   userId            Int?
   recognizedUserIds Int[]    @default([])
+  hashtags          String[] @default([])
   faceDescriptors   Json?    @map("face_descriptors")
 
   user User? @relation(fields: [userId], references: [id])

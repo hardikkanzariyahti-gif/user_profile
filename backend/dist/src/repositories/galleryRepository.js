@@ -10,6 +10,19 @@ const galleryRepository = {
             orderBy: { uploadedAt: 'desc' },
         });
     },
+    findById(id) {
+        return prisma_1.default.galleryItem.findUnique({
+            where: { id },
+        });
+    },
+    findByHashtag(tag) {
+        return prisma_1.default.galleryItem.findMany({
+            where: {
+                hashtags: { has: tag },
+            },
+            orderBy: { uploadedAt: 'desc' },
+        });
+    },
     updateById(id, data) {
         return prisma_1.default.galleryItem.update({
             where: { id },
