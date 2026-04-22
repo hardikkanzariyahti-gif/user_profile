@@ -11,8 +11,14 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({ onCapture, onCancel }) =>
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
 
+  const stopStream = (mediaStream?: MediaStream | null) => {
+    (mediaStream || stream)?.getTracks().forEach((track) => track.stop());
+  };
+
   React.useEffect(() => {
+    let activeStream: MediaStream | null = null;
     navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } }).then((mediaStream) => {
+      activeStream = mediaStream;
       if (videoRef.current) {
         videoRef.current.srcObject = mediaStream;
         setStream(mediaStream);
@@ -20,9 +26,7 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({ onCapture, onCancel }) =>
     });
 
     return () => {
-      if (stream) {
-        stream.getTracks().forEach((track) => track.stop());
-      }
+      stopStream(activeStream);
     };
   }, []);
 
@@ -30,11 +34,16 @@ const CameraCapture: React.FC<CameraCaptureProps> = ({ onCapture, onCancel }) =>
     if (videoRef.current && canvasRef.current) {
       const context = canvasRef.current.getContext('2d');
       if (context) {
-        context.drawImage(videoRef.current, 0, 0, canvasRef.current.width, canvasRef.current.height);
+        const width = videoRef.current.videoWidth || 640;
+        const height = videoRef.current.videoHeight || 480;
+        canvasRef.current.width = width;
+        canvasRef.current.height = height;
+        context.drawImage(videoRef.current, 0, 0, width, height);
         canvasRef.current.toBlob((blob) => {
           if (blob) {
             const file = new File([blob], 'capture.jpg', { type: 'image/jpeg' });
             const dataUrl = canvasRef.current!.toDataURL('image/jpeg');
+            stopStream();
             onCapture(file, dataUrl);
           }
         }, 'image/jpeg');

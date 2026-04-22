@@ -64,6 +64,17 @@ declare const galleryRepository: {
         hashtags: string[];
         faceDescriptors: import("@prisma/client/runtime/library").JsonValue | null;
     }, never, import("@prisma/client/runtime/library").DefaultArgs>;
+    deleteById(id: number): import(".prisma/client").Prisma.Prisma__GalleryItemClient<{
+        url: string;
+        id: number;
+        uploadedAt: Date;
+        label: string | null;
+        isProfile: boolean;
+        userId: number | null;
+        recognizedUserIds: number[];
+        hashtags: string[];
+        faceDescriptors: import("@prisma/client/runtime/library").JsonValue | null;
+    }, never, import("@prisma/client/runtime/library").DefaultArgs>;
 };
 export default galleryRepository;
 //# sourceMappingURL=galleryRepository.d.ts.map

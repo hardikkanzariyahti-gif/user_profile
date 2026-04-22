@@ -15,6 +15,15 @@ const galleryController = {
         const item = await galleryService_1.galleryService.getGalleryItem(id);
         res.json(item);
     },
+    async remove(req, res) {
+        const id = Number(req.params.id);
+        if (!id || isNaN(id)) {
+            res.status(400).json({ error: 'Valid gallery id is required.' });
+            return;
+        }
+        const result = await galleryService_1.galleryService.deleteGalleryItem(id);
+        res.json(result);
+    },
     async setHashtags(req, res) {
         const id = Number(req.params.id);
         if (!id || isNaN(id)) {
@@ -79,6 +88,29 @@ const galleryController = {
             return;
         }
         const result = await galleryService_1.galleryService.mergeClusterFaces(userId, faces);
+        res.json(result);
+    },
+    async setProfilePictureFromGalleryItem(req, res) {
+        const galleryItemId = Number(req.body.galleryItemId);
+        const userId = Number(req.body.userId);
+        if (!galleryItemId || !userId || isNaN(galleryItemId) || isNaN(userId)) {
+            res.status(400).json({ error: 'galleryItemId and userId are required and must be valid numbers.' });
+            return;
+        }
+        const result = await galleryService_1.galleryService.setProfilePictureFromGalleryItem(userId, galleryItemId);
+        res.json(result);
+    },
+    async ignoreCluster(req, res) {
+        const faces = req.body.faces;
+        if (!Array.isArray(faces)) {
+            res.status(400).json({ error: 'faces array is required.' });
+            return;
+        }
+        const result = await galleryService_1.galleryService.ignoreClusterFaces(faces);
+        res.json(result);
+    },
+    async resetIgnored(req, res) {
+        const result = await galleryService_1.galleryService.resetIgnoredFaces();
         res.json(result);
     },
 };

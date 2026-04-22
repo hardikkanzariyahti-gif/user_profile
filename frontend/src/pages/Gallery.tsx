@@ -1,9 +1,9 @@
-﻿import React, { useEffect, useMemo, useState } from 'react';
-import { Image as ImageIcon, CheckCircle2, AlertCircle, Plus, Camera, X, ChevronLeft, ChevronRight, Album as AlbumIcon, CheckSquare, Square, Share2, Hash, RefreshCw, RotateCcw, ChevronDown } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Image as ImageIcon, CheckCircle2, AlertCircle, Plus, Camera, X, ChevronLeft, ChevronRight, Album as AlbumIcon, CheckSquare, Square, Share2, Hash, RefreshCw, RotateCcw, ChevronDown, Trash2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import CameraCapture from '../components/CameraCapture';
-import { fetchGallery, uploadGallery, refreshGallery, getSyncStatus, setGalleryItemHashtags } from '../services/galleryService';
+import { fetchGallery, uploadGallery, refreshGallery, getSyncStatus, setGalleryItemHashtags, deleteGalleryItem } from '../services/galleryService';
 import { createAlbum } from '../services/albumService';
 
 interface UserProfile {
@@ -42,7 +42,10 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
   const [hashtagsDraft, setHashtagsDraft] = useState('');
   const [savingHashtags, setSavingHashtags] = useState(false);
   const [openHashtagsEditorNext, setOpenHashtagsEditorNext] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [syncMenuOpen, setSyncMenuOpen] = useState(false);
+  const [scanningBanner, setScanningBanner] = useState<{ count: number; progress: number; done: boolean } | null>(null);
+  const scanTimerRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
 
   // --- Album Selection State ---
   const [isSelectionMode, setIsSelectionMode] = useState(false);
@@ -154,17 +157,38 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
     files.forEach((file) => formData.append('gallery', file));
 
     try {
-      // Always upload as the logged in user
-      const updatedGallery = await uploadGallery(formData, loggedInUserId || undefined);
-
-      // If we are in personal mode, show the updated filtered gallery
-      // If we are in global mode, the backend returns everything by default (if listGallery is called with undefined)
-      // but the uploadGallery controller currently calls listGallery(userId).
-      // So we refresh manually to be safe.
+      await uploadGallery(formData, loggedInUserId || undefined);
       await loadGallery();
 
-      setMessage({ type: 'success', text: 'Successfully added to the gallery and scanned for faces!' });
-      setTimeout(() => setMessage(null), 3000);
+      // Start scanning banner with real progress polling
+      if (scanTimerRef.current) clearInterval(scanTimerRef.current);
+      setScanningBanner({ count: files.length, progress: 0, done: false });
+
+      // Poll the real sync status for accurate progress
+      const POLL_MS = 800;
+      // Give the backend a moment to kick off the scan
+      await new Promise(r => setTimeout(r, 600));
+
+      scanTimerRef.current = setInterval(async () => {
+        try {
+          const status = await getSyncStatus();
+          if (status && status.isScanning) {
+            const total = status.total || files.length;
+            const current = status.current || 0;
+            const pct = total > 0 ? Math.min(99, Math.round((current / total) * 100)) : 0;
+            setScanningBanner(prev => prev ? { ...prev, progress: pct, done: false } : null);
+          } else {
+            // Scan finished
+            clearInterval(scanTimerRef.current!);
+            scanTimerRef.current = null;
+            setScanningBanner(prev => prev ? { ...prev, progress: 100, done: true } : null);
+            await loadGallery();
+            setTimeout(() => setScanningBanner(null), 3000);
+          }
+        } catch {
+          // ignore transient poll errors
+        }
+      }, POLL_MS);
     } catch (err) {
       setMessage({ type: 'error', text: (err as any).message });
     } finally {
@@ -243,6 +267,42 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
     }
   };
 
+  const handleDeleteImage = async (img: GalleryItem) => {
+    if (img.isProfile) {
+      setMessage({ type: 'error', text: 'Profile photos cannot be deleted from the gallery.' });
+      return;
+    }
+    const id = typeof img.id === 'string' ? parseInt(img.id.replace('profile-', ''), 10) : img.id;
+    if (isNaN(id as number)) return;
+    const confirmed = window.confirm('Delete this photo permanently? This cannot be undone.');
+    if (!confirmed) return;
+
+    setDeleting(true);
+    try {
+      await deleteGalleryItem(id as number);
+      // Remove from state immediately (optimistic)
+      setImages(prev => prev.filter(i => i.id !== img.id));
+      if (selectedImage?.id === img.id) {
+        // Move to next/prev or close
+        const idx = images.findIndex(i => i.id === img.id);
+        const remaining = images.filter(i => i.id !== img.id);
+        if (remaining.length === 0) {
+          setSelectedImage(null);
+        } else {
+          const nextIdx = Math.min(idx, remaining.length - 1);
+          setSelectedImage(remaining[nextIdx]);
+          setCurrentIndex(nextIdx);
+        }
+      }
+      setMessage({ type: 'success', text: 'Photo deleted successfully.' });
+      setTimeout(() => setMessage(null), 3000);
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err.message || 'Failed to delete photo.' });
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   // --- Album Selection Handlers ---
   const toggleSelectionMode = () => {
     setIsSelectionMode(!isSelectionMode);
@@ -280,6 +340,85 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
 
   return (
     <div style={{ paddingBottom: '5rem' }}>
+
+      {/* AI SCANNING BANNER — real progress from server */}
+      <AnimatePresence>
+        {scanningBanner && (
+          <motion.div
+            initial={{ opacity: 0, y: 40, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 40, scale: 0.95 }}
+            style={{
+              position: 'fixed', bottom: '2rem', left: '2rem',
+              background: 'linear-gradient(135deg, #1e1b4b, #312e81)',
+              color: 'white', borderRadius: '20px', padding: '1.25rem 1.5rem',
+              boxShadow: '0 20px 50px rgba(99,102,241,0.35)', zIndex: 9999,
+              minWidth: '300px', maxWidth: '340px',
+              border: '1px solid rgba(255,255,255,0.15)'
+            }}
+          >
+            {/* Close / dismiss button */}
+            <button
+              onClick={() => {
+                if (scanTimerRef.current) clearInterval(scanTimerRef.current);
+                scanTimerRef.current = null;
+                setScanningBanner(null);
+              }}
+              title="Dismiss"
+              style={{
+                position: 'absolute', top: 10, right: 12,
+                background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.15)',
+                color: 'rgba(255,255,255,0.7)', cursor: 'pointer',
+                fontSize: '0.8rem', lineHeight: 1, borderRadius: '50%',
+                width: 24, height: 24, display: 'flex', alignItems: 'center', justifyContent: 'center'
+              }}
+            >✕</button>
+
+            {/* Header row */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.85rem', paddingRight: '1.5rem' }}>
+              <div style={{
+                width: 10, height: 10, borderRadius: '50%', flexShrink: 0,
+                background: scanningBanner.done ? '#10b981' : '#a5b4fc',
+                boxShadow: !scanningBanner.done ? '0 0 0 4px rgba(165,180,252,0.25)' : 'none',
+                animation: !scanningBanner.done ? 'pulse 1.5s ease-in-out infinite' : 'none'
+              }} />
+              <div>
+                <div style={{ fontWeight: 800, fontSize: '0.9rem', lineHeight: 1.3 }}>
+                  {scanningBanner.done
+                    ? '✅ Scan Complete!'
+                    : `AI scanning ${scanningBanner.count} photo${scanningBanner.count > 1 ? 's' : ''}…`}
+                </div>
+                <div style={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.5)', marginTop: 3 }}>
+                  {scanningBanner.done
+                    ? 'Gallery updated with face recognition tags.'
+                    : 'Detecting faces in background — you can keep browsing.'}
+                </div>
+              </div>
+            </div>
+
+            {/* Progress bar */}
+            <div style={{ background: 'rgba(255,255,255,0.1)', borderRadius: 99, height: 7, overflow: 'hidden', marginBottom: 5 }}>
+              <motion.div
+                animate={{ width: `${scanningBanner.progress}%` }}
+                transition={{ duration: 0.6, ease: 'easeOut' }}
+                style={{
+                  height: '100%', borderRadius: 99,
+                  background: scanningBanner.done
+                    ? '#10b981'
+                    : 'linear-gradient(90deg, #818cf8, #c084fc, #f472b6)'
+                }}
+              />
+            </div>
+
+            {/* Percentage label */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.68rem', color: 'rgba(255,255,255,0.38)', marginTop: 2 }}>
+              <span>{scanningBanner.done ? 'Done' : 'Processing…'}</span>
+              <span>{scanningBanner.progress}%</span>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-10" style={{ display: 'flex', flexWrap: 'wrap', gap: '1.5rem', marginBottom: '3rem' }}>
         <div>
           <h2 className="card-title" style={{ fontSize: '2.5rem', marginBottom: '0.5rem', fontWeight: 800, letterSpacing: '-0.02em' }}>
@@ -648,6 +787,20 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
                           <Hash size={12} /> Tags
                         </button>
                       )}
+                      {!img.isProfile && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleDeleteImage(img); }}
+                          className="btn"
+                          title="Delete photo"
+                          style={{
+                            padding: '4px 8px', fontSize: '0.65rem',
+                            background: 'rgba(239,68,68,0.8)', color: 'white',
+                            fontWeight: 900, borderRadius: '10px',
+                          }}
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      )}
                     </div>
                   </div>
                 </motion.div>
@@ -690,7 +843,24 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
             }}
             onClick={handleClosePreview}
           >
-            <div style={{ position: 'absolute', top: '2rem', right: '2rem', zIndex: 2001 }}>
+            <div style={{ position: 'absolute', top: '2rem', right: '2rem', zIndex: 2001, display: 'flex', gap: '0.75rem' }}>
+              {selectedImage && !selectedImage.isProfile && (
+                <button
+                  onClick={() => handleDeleteImage(selectedImage)}
+                  disabled={deleting}
+                  title="Delete this photo"
+                  style={{
+                    padding: '12px', borderRadius: '50%',
+                    background: deleting ? 'rgba(239,68,68,0.4)' : 'rgba(239,68,68,0.85)',
+                    border: '1px solid rgba(255,255,255,0.15)',
+                    color: 'white', cursor: deleting ? 'not-allowed' : 'pointer',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    transition: 'background 0.2s',
+                  }}
+                >
+                  {deleting ? <div className="loading-spinner" style={{ width: 22, height: 22, borderWidth: 2 }} /> : <Trash2 size={22} />}
+                </button>
+              )}
               <button onClick={handleClosePreview} className="btn btn-danger" style={{ padding: '12px', borderRadius: '50%', background: 'rgba(255,255,255,0.1)', border: 'none', color: 'white' }}>
                 <X size={32} />
               </button>

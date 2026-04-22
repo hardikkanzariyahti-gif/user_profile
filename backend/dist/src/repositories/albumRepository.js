@@ -78,6 +78,12 @@ const albumRepository = {
             data: {
                 title: data.title,
                 description: data.description,
+                items: data.itemIds ? {
+                    set: data.itemIds.map(itemId => ({ id: itemId })),
+                } : undefined,
+            },
+            include: {
+                items: true,
             },
         });
     },

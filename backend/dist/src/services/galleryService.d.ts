@@ -54,6 +54,9 @@ declare const galleryService: {
             profilePicture: string | null;
         }[];
     }>;
+    deleteGalleryItem(id: number): Promise<{
+        message: string;
+    }>;
     setGalleryItemHashtags(id: number, hashtagsInput: any): Promise<{
         id: number;
         url: string | null | undefined;
@@ -155,19 +158,28 @@ declare const galleryService: {
         durationSc: string;
         message?: undefined;
     }>;
-    getUnknownFaceClusters(): Promise<{
-        clusterId: any;
-        faceCount: any;
-        anchorImage: any;
-        anchorBox: any;
-        relatedPhotos: any;
-    }[]>;
+    getUnknownFaceClusters(): Promise<any[]>;
     mergeClusterFaces(userId: number, faces: {
         itemId: number;
         faceIndex: number;
     }[]): Promise<{
         message: string;
         updatedCount: number;
+    }>;
+    setProfilePictureFromGalleryItem(userId: number, galleryItemId: number): Promise<{
+        updated: boolean;
+        message: string;
+    }>;
+    ignoreClusterFaces(faces: {
+        itemId: number;
+        faceIndex: number;
+    }[]): Promise<{
+        message: string;
+        updatedCount: number;
+    }>;
+    resetIgnoredFaces(): Promise<{
+        message: string;
+        resetCount: number;
     }>;
 };
 export { galleryService, buildLabeledDescriptors };

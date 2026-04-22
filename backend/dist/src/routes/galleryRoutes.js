@@ -16,8 +16,12 @@ router.post('/tag-face', (0, asyncHandler_1.default)(galleryController_1.default
 router.post('/untag-face', (0, asyncHandler_1.default)(galleryController_1.default.untagFace));
 router.get('/clusters', (0, asyncHandler_1.default)(galleryController_1.default.getClusters));
 router.post('/clusters/merge', (0, asyncHandler_1.default)(galleryController_1.default.mergeCluster));
+router.post('/profile-picture-from-gallery', (0, asyncHandler_1.default)(galleryController_1.default.setProfilePictureFromGalleryItem));
+router.post('/clusters/ignore', (0, asyncHandler_1.default)(galleryController_1.default.ignoreCluster));
+router.post('/clusters/reset-ignored', (0, asyncHandler_1.default)(galleryController_1.default.resetIgnored));
 router.get('/search', (0, asyncHandler_1.default)(galleryController_1.default.searchByHashtag));
 router.post('/:id/hashtags', (0, asyncHandler_1.default)(galleryController_1.default.setHashtags));
 router.get('/:id', (0, asyncHandler_1.default)(galleryController_1.default.getById));
+router.delete('/:id', (0, asyncHandler_1.default)(galleryController_1.default.remove));
 exports.default = router;
 //# sourceMappingURL=galleryRoutes.js.map

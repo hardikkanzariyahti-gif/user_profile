@@ -47,6 +47,12 @@ const galleryRepository = {
   createOne(data: GalleryItemData) {
     return prisma.galleryItem.create({ data });
   },
+
+  deleteById(id: number) {
+    return prisma.galleryItem.delete({
+      where: { id },
+    });
+  },
 };
 
 export default galleryRepository;

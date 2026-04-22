@@ -113,7 +113,20 @@ declare const albumRepository: {
     update(id: number, data: {
         title?: string;
         description?: string;
+        itemIds?: number[];
     }): import(".prisma/client").Prisma.Prisma__AlbumClient<{
+        items: {
+            url: string;
+            id: number;
+            uploadedAt: Date;
+            label: string | null;
+            isProfile: boolean;
+            userId: number | null;
+            recognizedUserIds: number[];
+            hashtags: string[];
+            faceDescriptors: import("@prisma/client/runtime/library").JsonValue | null;
+        }[];
+    } & {
         id: number;
         userId: number;
         title: string;

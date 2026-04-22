@@ -2,9 +2,10 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 const AI_API_URL = 'http://localhost:8000/extract_faces';
+const AI_BATCH_URL = 'http://localhost:8000/extract_faces_batch';
 
 // For L2-normalized Facenet512 vectors, the standard Euclidean distance threshold is ~0.8.
-// We set it to 0.55 to be perfectly strict and prevent any false positives between completely different people.
+// We set it to 1.30 to be perfectly strict and prevent any false positives between completely different people.
 const MATCH_THRESHOLD = 1.30;
 const AMBIGUITY_MARGIN = 0.05;
 
@@ -53,20 +54,20 @@ function findBestMatchWithMargin(descriptor: Float32Array, knownUsers: any[]) {
 
   for (const labeledDescriptors of knownUsers) {
     let minDistance = Infinity;
-    
+
     for (const reference of labeledDescriptors.descriptors) {
       const refArray = new Float32Array(reference);
-      
+
       // Safety Check: Old Database vs New AI
       if (descriptor.length !== refArray.length) {
         console.warn(`[AI] Size mismatch! Old DB uses ${refArray.length}D vectors. The new AI uses ${descriptor.length}D. You must clear old tags.`);
         continue;
       }
-      
+
       const d = euclideanDistance(descriptor, refArray);
       if (d < minDistance) minDistance = d;
     }
-    
+
     if (minDistance !== Infinity) {
       allMatches.push({ label: labeledDescriptors.label, distance: minDistance });
     }
@@ -79,7 +80,7 @@ function findBestMatchWithMargin(descriptor: Float32Array, knownUsers: any[]) {
 
   // AI DEBUG: Log the distance scale
   if (best.distance > 2.0 || best.distance < 0) {
-     console.log(`[AI DEBUG] ⚠️  Unusual distance detected: ${best.distance.toFixed(4)}. Target dim: ${descriptor.length}, Candidate: ${best.label}`);
+    console.log(`[AI DEBUG] ⚠️  Unusual distance detected: ${best.distance.toFixed(4)}. Target dim: ${descriptor.length}, Candidate: ${best.label}`);
   }
 
   // Hard threshold
@@ -91,7 +92,7 @@ function findBestMatchWithMargin(descriptor: Float32Array, knownUsers: any[]) {
   // Ambiguity check
   if (sorted.length > 1) {
     const margin = sorted[1].distance - best.distance;
-    const AMBIGUITY_MARGIN = 0.15; 
+    const AMBIGUITY_MARGIN = 0.15;
     const CONFIDENT_THRESHOLD = 0.40; // below this = very confident
 
     if (margin < AMBIGUITY_MARGIN && best.distance > CONFIDENT_THRESHOLD) {
@@ -105,7 +106,7 @@ function findBestMatchWithMargin(descriptor: Float32Array, knownUsers: any[]) {
 }
 
 /**
- * Calls the Python Microservice to process the image.
+ * Calls the Python Microservice for a SINGLE image.
  */
 async function fetchFacesFromPython(imagePath: string): Promise<any[]> {
   try {
@@ -134,6 +135,53 @@ async function fetchFacesFromPython(imagePath: string): Promise<any[]> {
       console.error('[AI Engine] Failed to fetch faces from microservice:', err.message);
     }
     return [];
+  }
+}
+
+/**
+ * Calls the Python Microservice for a BATCH of images simultaneously.
+ * Sends up to `imagePaths.length` images in a single multipart POST.
+ * Returns results in the same order as the input paths.
+ *
+ * Falls back to sequential single-image requests if the batch endpoint is
+ * unavailable (e.g. older Python service version).
+ */
+async function fetchFacesFromPythonBatch(imagePaths: string[]): Promise<any[][]> {
+  if (imagePaths.length === 0) return [];
+  if (imagePaths.length === 1) {
+    const faces = await fetchFacesFromPython(imagePaths[0]);
+    return [faces];
+  }
+
+  try {
+    const formData = new FormData();
+    for (const imgPath of imagePaths) {
+      const fileBuffer = fs.readFileSync(imgPath);
+      const blob = new Blob([fileBuffer], { type: 'image/jpeg' });
+      formData.append('files', blob, path.basename(imgPath));
+    }
+
+    const res = await fetch(AI_BATCH_URL, {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!res.ok) {
+      throw new Error(`Batch endpoint returned ${res.status}: ${res.statusText}`);
+    }
+
+    const batchResults = (await res.json()) as Array<{ filename: string; faces: any[]; backend?: string }>;
+
+    // Results come back in the same order as files were appended
+    return batchResults.map(r => r.faces || []);
+  } catch (err: any) {
+    console.warn('[AI Engine] Batch endpoint failed, falling back to sequential:', err.message);
+    // Graceful fallback: run sequentially
+    const results: any[][] = [];
+    for (const imgPath of imagePaths) {
+      results.push(await fetchFacesFromPython(imgPath));
+    }
+    return results;
   }
 }
 
@@ -187,11 +235,11 @@ async function getAllDescriptors(imagePath: string): Promise<Float32Array[]> {
 }
 
 /**
- * Core function for bulk gallery scanning
+ * Core function for bulk gallery scanning — single image.
  */
 async function detectFaces(imagePath: string) {
   const faces = await fetchFacesFromPython(imagePath);
-  
+
   const filename = path.basename(imagePath);
   console.log(`[detectFaces] ${filename}: Python Engine found ${faces.length} high-quality face(s)`);
 
@@ -201,12 +249,31 @@ async function detectFaces(imagePath: string) {
   }));
 }
 
+/**
+ * Core function for bulk gallery scanning — PARALLEL BATCH.
+ * Sends multiple images to Python in ONE request and processes them in parallel.
+ * Returns results in same order as imagePaths.
+ */
+async function detectFacesBatch(imagePaths: string[]): Promise<Array<Array<{ descriptor: Float32Array; box: any }>>> {
+  const rawResults = await fetchFacesFromPythonBatch(imagePaths);
+
+  return rawResults.map((faces, idx) => {
+    const filename = path.basename(imagePaths[idx]);
+    console.log(`[detectFacesBatch] ${filename}: ${faces.length} face(s) found`);
+    return faces.map((d: any) => ({
+      descriptor: l2Normalize(new Float32Array(d.descriptor)),
+      box: d.box,
+    }));
+  });
+}
+
 export default {
   getFaceDescriptor,
   identifyFace,
   identifyAllFaces,
   getAllDescriptors,
   detectFaces,
+  detectFacesBatch,
   serializeDescriptor,
   deserializeDescriptor,
   findBestMatchWithMargin,
