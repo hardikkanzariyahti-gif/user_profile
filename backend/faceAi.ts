@@ -5,8 +5,8 @@ const AI_API_URL = 'http://localhost:8000/extract_faces';
 const AI_BATCH_URL = 'http://localhost:8000/extract_faces_batch';
 
 // For L2-normalized Facenet512 vectors, the standard Euclidean distance threshold is ~0.8.
-// We set it to 1.30 to be perfectly strict and prevent any false positives between completely different people.
-const MATCH_THRESHOLD = 1.30;
+// We set it to 1.10 to be perfectly strict and prevent any false positives between completely different people.
+const MATCH_THRESHOLD = 1.10;
 const AMBIGUITY_MARGIN = 0.05;
 
 let isLoaded = false;

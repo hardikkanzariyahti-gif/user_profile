@@ -12,9 +12,9 @@ from deepface import DeepFace
 
 app = FastAPI(title="Face AI Microservice (DeepFace)")
 
-# Thread pool for CPU-bound DeepFace work — allows TRUE parallel processing.
-# Workers = number of CPU cores available (max 8 to avoid memory pressure).
-_executor = ThreadPoolExecutor(max_workers=min(8, (os.cpu_count() or 2)))
+# Workers = 2 to avoid CPU thread thrashing. TensorFlow already uses multiple 
+# internal threads per image, so too many parallel workers makes it SLOWER on CPU.
+_executor = ThreadPoolExecutor(max_workers=2)
 
 
 # ─── Model warm-up ────────────────────────────────────────────────────────────
@@ -26,10 +26,10 @@ def load_model():
         DeepFace.represent(
             dummy_img,
             model_name='Facenet512',
-            detector_backend='retinaface',
+            detector_backend='mtcnn',
             enforce_detection=False
         )
-        print(f"DeepFace Loaded Successfully! (Facenet512 + RetinaFace) — {_executor._max_workers} parallel workers ready")
+        print(f"DeepFace Loaded Successfully! (Facenet512 + MTCNN) — {_executor._max_workers} parallel workers ready")
     except Exception as e:
         print("Model initialization error:", e)
 
@@ -39,7 +39,7 @@ def load_model():
 def root():
     return {
         "status": "running",
-        "engine": "DeepFace (Facenet512 / RetinaFace)",
+        "engine": "DeepFace (Facenet512 / MTCNN)",
         "parallel_workers": _executor._max_workers,
     }
 
@@ -57,7 +57,16 @@ def _extract_faces_sync(img_bytes: bytes) -> dict:
         return {"error": "Invalid image file format.", "faces": []}
 
     last_error = None
-    for backend in ("retinaface", "opencv"):
+
+    # --- OPTIMIZATION: Internal Resizing (Fast Scan) ---
+    # Downscaling large images before scanning reduces CPU math workload significantly.
+    max_dim = 800
+    h, w = img.shape[:2]
+    if h > max_dim or w > max_dim:
+        scale = max_dim / max(h, w)
+        img = cv2.resize(img, (int(w * scale), int(h * scale)))
+
+    for backend in ("mtcnn", "opencv"):
         try:
             results = DeepFace.represent(
                 img_path=img,
@@ -69,8 +78,14 @@ def _extract_faces_sync(img_bytes: bytes) -> dict:
             if isinstance(results, dict):
                 results = [results]
 
+            # inclusive threshold for MTCNN, stricter for OpenCV fallback
+            DETECTION_THRESHOLD = 0.85 if backend == "mtcnn" else 0.95
             faces = []
             for face in results:
+                conf = face.get('face_confidence', 0.99)
+                if conf < DETECTION_THRESHOLD:
+                    continue
+                    
                 area = face['facial_area']
                 faces.append({
                     "box": {
@@ -79,7 +94,7 @@ def _extract_faces_sync(img_bytes: bytes) -> dict:
                         "_width": area['w'],
                         "_height": area['h']
                     },
-                    "confidence": face.get('face_confidence', 0.99),
+                    "confidence": conf,
                     "descriptor": face['embedding']
                 })
 

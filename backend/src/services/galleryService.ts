@@ -479,30 +479,43 @@ const galleryService = {
     await galleryRepository.createMany(itemsToSave);
 
     // ── PHASE 2: Run face detection in background (non-blocking) ───────────────
-    // Using setImmediate to ensure the HTTP response is sent FIRST.
-    // Batch size: 10 images sent to Python in one parallel call.
+    // Using Parallel Processing and functional mapping (map/filter) for maximum speed.
     setImmediate(async () => {
       try {
+        // --- SYNC STATUS TRACKING ---
+        // Initialize state immediately so polling catches it
+        this.syncState.isScanning = true;
+        this.syncState.current = 0;
+        this.syncState.total = files.length;
+
         const labeledDescriptors = await getCachedModel();
         const allItems = await galleryRepository.findAll();
 
-        // Resolve DB items for each uploaded file
-        const pairs: Array<{ file: any; item: any }> = [];
-        for (const file of files) {
-          const matchingItem = allItems.find((i: any) => i.url && i.url.includes(file.filename));
-          if (matchingItem) pairs.push({ file, item: matchingItem });
-        }
+        // Filter and map pairs using functional patterns
+        const pairs = files
+          .map(file => ({
+            file,
+            item: allItems.find((i: any) => i.url && i.url.includes(file.filename))
+          }))
+          .filter(p => p.item);
 
-        // ── Batch-scan ALL uploaded images in parallel (one Python round-trip) ──
+        this.syncState.total = pairs.length;
+
+        // Split into batches of 10
         const UPLOAD_BATCH = 10;
-        for (let i = 0; i < pairs.length; i += UPLOAD_BATCH) {
-          const chunk = pairs.slice(i, i + UPLOAD_BATCH);
-          const filePaths = chunk.map(p => p.file.path);
+        const batches = Array.from({ length: Math.ceil(pairs.length / UPLOAD_BATCH) }, (_, i) => 
+          pairs.slice(i * UPLOAD_BATCH, i * UPLOAD_BATCH + UPLOAD_BATCH)
+        );
 
-          console.log(`[Upload BG] 🚀 Batch scanning ${chunk.length} new photo(s) in parallel...`);
+        // ── Process all batches in PARALLEL ──
+        console.log(`[Upload BG] 🚀 Parallel Scanning ${pairs.length} images in ${batches.length} batches...`);
+        
+        await Promise.all(batches.map(async (chunk) => {
+          const filePaths = chunk.map(p => p.file.path);
           const batchResults = await faceAi.detectFacesBatch(filePaths);
 
           await Promise.all(chunk.map(async ({ item }, j) => {
+            if (!item) return;
             const detections = batchResults[j];
             const faceDescriptors = detections.map((d: any) => ({
               descriptor: faceAi.serializeDescriptor(d.descriptor),
@@ -514,23 +527,34 @@ const galleryService = {
               recognizedUserIds = detections
                 .map((det: any) => {
                   const match = faceAi.findBestMatchWithMargin(det.descriptor, labeledDescriptors);
-                  if (match.label === 'unknown') return null;
-                  return parseUserId(match.label);
+                  return match.label === 'unknown' ? null : parseUserId(match.label);
                 })
                 .filter((id: any): id is number => id !== null);
             }
 
-            await galleryRepository.updateById(item.id, {
-              faceDescriptors,
-              recognizedUserIds: [...new Set(recognizedUserIds)],
-            });
+            try {
+              await galleryRepository.updateById(item.id, {
+                faceDescriptors,
+                recognizedUserIds: [...new Set(recognizedUserIds)],
+              });
+            } catch (dbErr) {
+              console.warn(`[Upload BG] ⚠️ Failed to update item ${item.id}, retrying once...`);
+              await new Promise(r => setTimeout(r, 1000));
+              await galleryRepository.updateById(item.id, {
+                faceDescriptors,
+                recognizedUserIds: [...new Set(recognizedUserIds)],
+              }).catch(e => console.error(`[Upload BG] ❌ Permanent failure for item ${item.id}:`, e.message));
+            }
           }));
-        }
 
+          this.syncState.current += chunk.length;
+        }));
+
+        this.syncState.isScanning = false;
         invalidateModelCache();
-        console.log(`[Upload] ✅ Background face detection complete for ${files.length} photo(s).`);
+        console.log(`[Upload] ✅ Parallel background detection complete.`);
       } catch (err) {
-        console.error('[Upload] ❌ Background face detection failed:', err);
+        console.error('[Upload] ❌ Parallel background detection failed:', err);
       }
     });
 
@@ -695,29 +719,25 @@ const galleryService = {
     this.syncState.total = realItems.length;
     console.log(`[AI Sync] Scanning ${realItems.length} photos with ${labeledDescriptors.length} known user(s)...\n`);
 
-    // Process in parallel batches — send CHUNK images to Python simultaneously.
-    // CHUNK=10 gives best throughput without overwhelming the Python thread pool.
+    // Using Parallel processing with functional batching (map)
     const CHUNK = 10;
-    for (let i = 0; i < realItems.length; i += CHUNK) {
-      const chunk = realItems.slice(i, i + CHUNK);
+    const batches = Array.from({ length: Math.ceil(realItems.length / CHUNK) }, (_, i) => 
+      realItems.slice(i * CHUNK, i * CHUNK + CHUNK)
+    );
 
-      // ── Batch face detection: ONE round-trip to Python for the entire chunk ──
+    await Promise.all(batches.map(async (chunk) => {
+      // ── Batch face detection in parallel ──
       const chunkDetections = await detectFacesWithCacheBatch(chunk);
 
-      // ── Identify & update all items in the chunk (CPU only, no AI calls) ────
+      // ── Process matches for this batch ──
       await Promise.all(chunk.map(async (item, chunkIdx) => {
         const detections = chunkDetections[chunkIdx];
-        console.log(`  Item ${item.id}: ${detections.length} face(s) detected`);
-
-        // Existing tags (never removed)
         const existingIds = (Array.isArray(item.recognizedUserIds)
           ? item.recognizedUserIds.map((id: any) => Number(id))
           : []).sort((a: number, b: number) => a - b);
 
-        // Skip Identification if no users in model
         if (labeledDescriptors.length === 0) return;
 
-        // Identify each detected face
         const aiIds = detections
           .map((det: any, fi: number) => {
             const faceDescs = item.faceDescriptors as any[];
@@ -728,32 +748,20 @@ const galleryService = {
             if (match.label === 'unknown') return null;
 
             const id = parseUserId(match.label);
-            if (id !== null && rejectedIds.includes(id)) {
-              console.log(`    → AI returned user ${id}, but skipping because it was manually rejected!`);
-              return null;
-            }
-
-            if (id !== null) console.log(`    → matched user ${id} (dist=${match.distance?.toFixed(3)})`);
-            return id;
+            return (id !== null && !rejectedIds.includes(id)) ? id : null;
           })
           .filter((id: any): id is number => id !== null);
 
-        // Merge without removing existing tags
         const merged = [...new Set([...existingIds, ...aiIds])].sort((a: number, b: number) => a - b);
 
         if (!arraysEqual(merged, existingIds)) {
           await galleryRepository.updateById(item.id, { recognizedUserIds: merged });
           updatedCount++;
-          const added = merged.filter((id: number) => !existingIds.includes(id));
-          console.log(`  ✅ Item ${item.id}: added [${added.join(', ')}]`);
         }
       }));
 
       this.syncState.current += chunk.length;
-
-      // Brief yield to keep event loop responsive between chunks
-      await new Promise(resolve => setTimeout(resolve, 5));
-    }
+    }));
 
     const duration = ((Date.now() - startTime) / 1000).toFixed(1);
     console.log(`\n✅ AI Sync done in ${duration}s — updated ${updatedCount}/${realItems.length} photos.\n`);
@@ -774,48 +782,58 @@ const galleryService = {
     // Node.js event loop and Python AI service throughput.
     // Larger chunk = fewer Python round-trips = faster clustering
     const CLUSTER_CHUNK = 10;
-    const unknownPhotos: any[] = [];
+    const batches = Array.from({ length: Math.ceil(realItems.length / CLUSTER_CHUNK) }, (_, i) => 
+      realItems.slice(i * CLUSTER_CHUNK, i * CLUSTER_CHUNK + CLUSTER_CHUNK)
+    );
 
-    for (let ci = 0; ci < realItems.length; ci += CLUSTER_CHUNK) {
-      const chunk = realItems.slice(ci, ci + CLUSTER_CHUNK);
-
+    const unknownPhotos = (await Promise.all(batches.map(async (chunk) => {
       // Batch-detect all faces in this chunk with ONE parallel Python call
       const chunkDetections = await detectFacesWithCacheBatch(chunk);
 
-      const results = chunk.map((item, chunkIdx) => {
+      return chunk.map((item, chunkIdx) => {
         const detections = chunkDetections[chunkIdx];
         const faceDescs = Array.isArray(item.faceDescriptors) ? item.faceDescriptors as any[] : [];
-        const unknownFacesInPhoto: any[] = [];
         const recognizedIds = Array.isArray(item.recognizedUserIds)
           ? item.recognizedUserIds.map((id: any) => Number(id))
           : [];
 
-        for (let i = 0; i < detections.length; i++) {
-          const cachedFace = faceDescs[i] || {};
-          if (cachedFace.manuallyTaggedUserId || cachedFace.isIgnored) continue;
+        const unknownFacesInPhoto = detections
+          .map((det: any, i: number) => {
+            const cachedFace = faceDescs[i] || {};
+            if (cachedFace.manuallyTaggedUserId || cachedFace.isIgnored) return null;
 
-          const descriptor = detections[i]?.descriptor;
-          const box = detections[i]?.box || cachedFace.box;
-          if (!box) continue;
+            const descriptor = det?.descriptor;
+            const box = det?.box || cachedFace.box;
+            if (!box) return null;
 
-          if (!descriptor) {
-            unknownFacesInPhoto.push({ itemId: item.id, faceIndex: i, box, descriptor: null });
-            continue;
-          }
+            if (!descriptor) {
+              return { itemId: item.id, faceIndex: i, box, descriptor: null };
+            }
 
-          const match = faceAi.findBestMatchWithMargin(descriptor, labeledDescriptors);
-          unknownFacesInPhoto.push({
-            itemId: item.id,
-            faceIndex: i,
-            box,
-            descriptor,
-            aiSuggestion: match.label !== 'unknown' ? match.label : null,
+            const match = faceAi.findBestMatchWithMargin(descriptor, labeledDescriptors);
+            if (match.label !== 'unknown') return null; // Already identified by AI, not unknown
+
+            return {
+              itemId: item.id,
+              faceIndex: i,
+              box,
+              descriptor,
+              aiSuggestion: null, // Since we return null for matches, this would be null anyway
+            };
+          })
+          .filter((f: any) => f !== null);
+
+        // High-Precision Fallback:
+        // If a photo has NO recognized users at all, it MUST appear in Discovery 
+        // so the user can identify it manually, even if the AI failed to find a face box.
+        if (unknownFacesInPhoto.length === 0 && recognizedIds.length === 0) {
+          unknownFacesInPhoto.push({ 
+            itemId: item.id, 
+            faceIndex: -1, 
+            box: null, 
+            descriptor: null, 
+            aiSuggestion: null 
           });
-        }
-
-        // Fallback: surface photos with no detections and no recognized users
-        if (unknownFacesInPhoto.length === 0 && detections.length === 0 && recognizedIds.length === 0) {
-          unknownFacesInPhoto.push({ itemId: item.id, faceIndex: -1, box: null });
         }
 
         if (unknownFacesInPhoto.length === 0) return null;
@@ -834,16 +852,7 @@ const galleryService = {
           })),
         };
       });
-
-      for (const r of results) {
-        if (r) unknownPhotos.push(r);
-      }
-
-      // Brief yield to keep server responsive during large scans
-      if (ci + CLUSTER_CHUNK < realItems.length) {
-        await new Promise(resolve => setTimeout(resolve, 5));
-      }
-    }
+    }))).flat().filter(r => r !== null);
 
     const cleanedClusters = unknownPhotos
       .sort((a, b) => b.uploadedAt - a.uploadedAt)
@@ -857,9 +866,9 @@ const galleryService = {
     const allItems: any[] = await galleryRepository.findAll();
 
     let updateCount = 0;
-    for (const face of faces) {
+    await Promise.all(faces.map(async (face) => {
       const item = allItems.find(i => i.id === face.itemId);
-      if (!item) continue;
+      if (!item) return;
 
       let updateData: any = {};
 
@@ -880,23 +889,11 @@ const galleryService = {
         await galleryRepository.updateById(item.id, updateData);
         updateCount++;
       }
-    }
+    }));
 
     invalidateModelCache();
 
-    // Auto-set profile picture: if a user was just manually tagged and has no profile picture,
-    // set one from the tagged photo so their profile is immediately populated.
-    const autoProfileUpdates: Promise<any>[] = [];
-    const taggedUserIds = [...new Set(faces.map(f => userId))];
-    for (const uid of taggedUserIds) {
-      const taggedItem = allItems.find(i => faces.some(f => f.itemId === i.id));
-      if (taggedItem) {
-        autoProfileUpdates.push(
-          galleryService.setProfilePictureFromGalleryItem(uid, taggedItem.id).catch(() => {})
-        );
-      }
-    }
-    await Promise.all(autoProfileUpdates);
+    invalidateModelCache();
 
     return { message: `Successfully matched person to ${updateCount} unknown photo(s).`, updatedCount: updateCount };
   },
@@ -931,10 +928,9 @@ const galleryService = {
   async ignoreClusterFaces(faces: { itemId: number, faceIndex: number }[]) {
     const allItems: any[] = await galleryRepository.findAll();
     let updateCount = 0;
-
-    for (const face of faces) {
+    await Promise.all(faces.map(async (face) => {
       const item = allItems.find(i => i.id === face.itemId);
-      if (!item) continue;
+      if (!item) return;
 
       if (Array.isArray(item.faceDescriptors)) {
         const newDescriptors = [...item.faceDescriptors] as any[];
@@ -944,7 +940,7 @@ const galleryService = {
           updateCount++;
         }
       }
-    }
+    }));
 
     return { message: `Successfully ignored ${updateCount} face(s). Discovery list cleaned.`, updatedCount: updateCount };
   },
@@ -952,23 +948,22 @@ const galleryService = {
   async resetIgnoredFaces() {
     const allItems: any[] = await galleryRepository.findAll();
     let resetCount = 0;
-
-    for (const item of allItems) {
+    await Promise.all(allItems.map(async (item) => {
       if (Array.isArray(item.faceDescriptors)) {
         const newDescriptors = [...item.faceDescriptors] as any[];
         let itemChanged = false;
-        for (const d of newDescriptors) {
+        newDescriptors.forEach(d => {
           if (d && d.isIgnored) {
             delete d.isIgnored;
             itemChanged = true;
             resetCount++;
           }
-        }
+        });
         if (itemChanged) {
           await galleryRepository.updateById(item.id, { faceDescriptors: newDescriptors });
         }
       }
-    }
+    }));
 
     return { message: `Restored ${resetCount} faces to discovery.`, resetCount };
   },

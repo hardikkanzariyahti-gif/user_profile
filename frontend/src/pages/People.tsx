@@ -40,8 +40,9 @@ export default function People() {
   }>({ open: false, itemId: null, boxes: [], item: null, loading: false, error: null });
   const [previewNaturalSize, setPreviewNaturalSize] = useState<{ w: number; h: number } | null>(null);
 
-  const maybeOfferProfilePictureFallback = async (userId: number, galleryItemId: number) => {
-    const selectedUser = users.find((u) => Number(u.id) === Number(userId));
+  const maybeOfferProfilePictureFallback = async (userId: number, galleryItemId: number, freshUsers?: any[]) => {
+    const userList = freshUsers || users;
+    const selectedUser = userList.find((u) => Number(u.id) === Number(userId));
     if (!selectedUser || selectedUser.profilePicture) return;
 
     const shouldUseAsProfile = window.confirm(
@@ -69,10 +70,14 @@ export default function People() {
       const usersJson = await usersRes.json().catch(() => null);
       if (!clustersRes.ok) throw new Error(clustersJson?.error || 'Failed to load unknown people clusters.');
       if (!usersRes.ok) throw new Error(usersJson?.error || 'Failed to load users.');
+      
+      const newUsers = Array.isArray(usersJson) ? usersJson : [];
       setClusters(Array.isArray(clustersJson) ? clustersJson : []);
-      setUsers(Array.isArray(usersJson) ? usersJson : []);
+      setUsers(newUsers);
+      return { clusters: Array.isArray(clustersJson) ? clustersJson : [], users: newUsers };
     } catch (err) {
       setMessage({ type: 'error', text: 'Failed to load people data.' });
+      return { clusters: [], users: [] };
     } finally {
       setLoading(false);
     }
@@ -131,9 +136,9 @@ export default function People() {
       if (!res.ok) throw new Error(data.error);
 
       setMessage({ type: 'success', text: `Success! Tagged ${selectedFaces.length} photos. AI is now auto-scanning the rest...` });
-      await maybeOfferProfilePictureFallback(userId, selectedFaces[0].itemId);
+      const freshData = await fetchData();
+      await maybeOfferProfilePictureFallback(userId, selectedFaces[0].itemId, freshData.users);
       setSelectedCluster(null);
-      await fetchData();
     } catch (err: any) {
       setMessage({ type: 'error', text: err.message || 'Merge failed.' });
     } finally {
@@ -151,8 +156,8 @@ export default function People() {
       });
       if (!res.ok) throw new Error('Quick tag failed');
       setMessage({ type: 'success', text: 'Face identified successfully.' });
-      await maybeOfferProfilePictureFallback(userId, face.itemId);
-      await fetchData();
+      const freshData = await fetchData();
+      await maybeOfferProfilePictureFallback(userId, face.itemId, freshData.users);
     } catch (err: any) {
       setMessage({ type: 'error', text: err.message });
     } finally {
@@ -552,9 +557,9 @@ export default function People() {
                             const result = await res.json();
                             if (!res.ok) throw new Error(result.error);
                             setMessage({ type: 'success', text: `Tagged ${facesToTag.length} photos to ${u.name}` });
-                            await maybeOfferProfilePictureFallback(u.id, facesToTag[0].itemId);
+                            const freshData = await fetchData();
+                            await maybeOfferProfilePictureFallback(u.id, facesToTag[0].itemId, freshData.users);
                             setSelectedCluster(null);
-                            await fetchData();
                           } catch (err: any) {
                             setMessage({ type: 'error', text: err.message });
                           } finally {

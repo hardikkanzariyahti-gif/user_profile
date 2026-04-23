@@ -3,7 +3,7 @@ import { Image as ImageIcon, CheckCircle2, AlertCircle, Plus, Camera, X, Chevron
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import CameraCapture from '../components/CameraCapture';
-import { fetchGallery, uploadGallery, refreshGallery, getSyncStatus, setGalleryItemHashtags, deleteGalleryItem } from '../services/galleryService';
+import { fetchGallery, uploadGallery, refreshGallery, getSyncStatus, setGalleryItemHashtags, deleteGalleryItem, untagFaceInPhoto } from '../services/galleryService';
 import { createAlbum } from '../services/albumService';
 
 interface UserProfile {
@@ -91,8 +91,8 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
     setOpenHashtagsEditorNext(false);
   }, [selectedImage?.id]);
 
-  const loadGallery = async () => {
-    setLoading(true);
+  const loadGallery = async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       // Determine what to fetch based on viewMode and login status
       const userIdToFetch = (viewMode === 'personal' && loggedInUserId) ? loggedInUserId : undefined;
@@ -130,7 +130,7 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
           } else if (status && !status.isScanning) {
             setRefreshing(false);
             if (interval) clearInterval(interval);
-            await loadGallery();
+            await loadGallery(true);
             setMessage({ type: 'success', text: 'AI sync complete. Gallery updated.' });
             setTimeout(() => setMessage(null), 5000);
           }
@@ -158,7 +158,7 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
 
     try {
       await uploadGallery(formData, loggedInUserId || undefined);
-      await loadGallery();
+      await loadGallery(true);
 
       // Start scanning banner with real progress polling
       if (scanTimerRef.current) clearInterval(scanTimerRef.current);
@@ -182,7 +182,17 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
             clearInterval(scanTimerRef.current!);
             scanTimerRef.current = null;
             setScanningBanner(prev => prev ? { ...prev, progress: 100, done: true } : null);
-            await loadGallery();
+            
+            // Fetch updated data silently
+            const userIdToFetch = (viewMode === 'personal' && loggedInUserId) ? loggedInUserId : undefined;
+            const updatedData = await fetchGallery(userIdToFetch);
+            setImages(updatedData);
+
+            // If a preview is currently open, update its tags too!
+            if (selectedImage) {
+              const freshImg = updatedData.find((i: any) => i.id === selectedImage.id);
+              if (freshImg) setSelectedImage(freshImg);
+            }
             setTimeout(() => setScanningBanner(null), 3000);
           }
         } catch {
@@ -300,6 +310,39 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
       setMessage({ type: 'error', text: err.message || 'Failed to delete photo.' });
     } finally {
       setDeleting(false);
+    }
+  };
+
+  const handleUntagUser = async (user: UserProfile, img?: GalleryItem) => {
+    const item = img || selectedImage;
+    if (!item) return;
+    const itemId = typeof item.id === 'string'
+      ? parseInt(item.id.replace('profile-', ''), 10)
+      : item.id;
+    
+    if (isNaN(itemId as number)) return;
+
+    const confirmed = window.confirm(`Remove "${user.name}" from this photo? AI will not re-tag them here.`);
+    if (!confirmed) return;
+
+    try {
+      await untagFaceInPhoto(itemId as number, user.id);
+      
+      // Update local state
+      const updatedRecognizedUsers = (item.recognizedUsers || []).filter(u => u.id !== user.id);
+      
+      setImages(prev => prev.map(i => {
+        const id = typeof i.id === 'string' ? parseInt(i.id.replace('profile-', ''), 10) : i.id;
+        return id === itemId ? { ...i, recognizedUsers: updatedRecognizedUsers } : i;
+      }));
+      
+      if (selectedImage && (selectedImage.id === item.id)) {
+        setSelectedImage(prev => prev ? { ...prev, recognizedUsers: updatedRecognizedUsers } : prev);
+      }
+      setMessage({ type: 'success', text: `Removed ${user.name} from photo.` });
+      setTimeout(() => setMessage(null), 3000);
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err.message || 'Failed to remove tag.' });
     }
   };
 
@@ -741,6 +784,33 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
                           />
                         </div>
                         {user.name.split(' ')[0]}
+                        {!img.isProfile && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleUntagUser(user, img); }}
+                            title="Remove tag"
+                            style={{
+                              background: 'rgba(255, 255, 255, 0.1)',
+                              border: 'none',
+                              color: 'white',
+                              cursor: 'pointer',
+                              width: '14px',
+                              height: '14px',
+                              borderRadius: '50%',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              fontSize: '9px',
+                              fontWeight: 900,
+                              marginLeft: '0.2rem',
+                              transition: 'all 0.2s',
+                              opacity: 0.7
+                            }}
+                            onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(239, 68, 68, 0.8)'}
+                            onMouseLeave={(e) => e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)'}
+                          >
+                            ✕
+                          </button>
+                        )}
                       </div>
                     ))
                   }
@@ -964,6 +1034,32 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
                           />
                         </div>
                         {user.name}
+                        {!selectedImage.isProfile && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleUntagUser(user); }}
+                            title="Remove this person"
+                            style={{
+                              background: 'rgba(239, 68, 68, 0.2)',
+                              border: 'none',
+                              color: '#f87171',
+                              cursor: 'pointer',
+                              width: '20px',
+                              height: '20px',
+                              borderRadius: '50%',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              fontSize: '12px',
+                              fontWeight: 900,
+                              marginLeft: '0.4rem',
+                              transition: 'all 0.2s'
+                            }}
+                            onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(239, 68, 68, 0.4)'}
+                            onMouseLeave={(e) => e.currentTarget.style.background = 'rgba(239, 68, 68, 0.2)'}
+                          >
+                            ✕
+                          </button>
+                        )}
                       </div>
                     ))
                   ) : (
