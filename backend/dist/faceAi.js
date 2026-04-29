@@ -36,16 +36,15 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
 const AI_API_URL = 'http://localhost:8000/extract_faces';
-// For L2-normalized Facenet512 vectors, the standard Euclidean distance threshold is ~0.8.
-// We set it to 0.55 to be perfectly strict and prevent any false positives between completely different people.
-const MATCH_THRESHOLD = 1.30;
-const AMBIGUITY_MARGIN = 0.05;
+const AI_BATCH_URL = 'http://localhost:8000/extract_faces_batch';
+const MATCH_THRESHOLD = 0.8;
+const AMBIGUITY_MARGIN = 0.25;
+const AUTO_TAG_THRESHOLD = 20;
 let isLoaded = false;
 async function loadModels() {
-    // We dont load models to RAM in Node anymore! The Python server holds them.
     if (isLoaded)
         return;
-    console.log('Smart Systems (DeepFace Microservice Mode) Loaded! 🚀');
+    console.log('Smart Systems (DeepFace Microservice Mode) Loaded!');
     isLoaded = true;
 }
 function euclideanDistance(d1, d2) {
@@ -75,21 +74,28 @@ function deserializeDescriptor(data) {
         return null;
     return l2Normalize(new Float32Array(data));
 }
-/**
- * Match a 512D face descriptor against all known users.
- * Contains safety check for mixed 128D/512D arrays.
- */
+function parseLabelToUser(label) {
+    if (!label || label === 'unknown')
+        return null;
+    try {
+        const parsed = JSON.parse(label);
+        if (parsed && typeof parsed.id === 'number' && typeof parsed.name === 'string') {
+            return { id: parsed.id, name: parsed.name };
+        }
+        return null;
+    }
+    catch {
+        return null;
+    }
+}
 function findBestMatchWithMargin(descriptor, knownUsers) {
     const allMatches = [];
     for (const labeledDescriptors of knownUsers) {
         let minDistance = Infinity;
         for (const reference of labeledDescriptors.descriptors) {
             const refArray = new Float32Array(reference);
-            // Safety Check: Old Database vs New AI
-            if (descriptor.length !== refArray.length) {
-                console.warn(`[AI] Size mismatch! Old DB uses ${refArray.length}D vectors. The new AI uses ${descriptor.length}D. You must clear old tags.`);
+            if (descriptor.length !== refArray.length)
                 continue;
-            }
             const d = euclideanDistance(descriptor, refArray);
             if (d < minDistance)
                 minDistance = d;
@@ -100,33 +106,56 @@ function findBestMatchWithMargin(descriptor, knownUsers) {
     }
     const sorted = allMatches.sort((a, b) => a.distance - b.distance);
     const best = sorted[0];
+    const second = sorted[1];
+    console.log('[Match] Best:', best?.label, '=', best?.distance?.toFixed(3), 'Thresh:', MATCH_THRESHOLD);
     if (!best)
         return { label: 'unknown', distance: null };
-    // AI DEBUG: Log the distance scale
-    if (best.distance > 2.0 || best.distance < 0) {
-        console.log(`[AI DEBUG] ⚠️  Unusual distance detected: ${best.distance.toFixed(4)}. Target dim: ${descriptor.length}, Candidate: ${best.label}`);
-    }
-    // Hard threshold
     if (best.distance > MATCH_THRESHOLD) {
-        console.log(`[AI] ❌ No match. Best=${best.label} dist=${best.distance?.toFixed(2)} > threshold=${MATCH_THRESHOLD}`);
-        return { label: 'unknown', distance: best.distance, candidate: best.label };
+        return { label: 'unknown', distance: best.distance };
     }
-    // Ambiguity check
-    if (sorted.length > 1) {
-        const margin = sorted[1].distance - best.distance;
-        const AMBIGUITY_MARGIN = 0.15;
-        const CONFIDENT_THRESHOLD = 0.40; // below this = very confident
-        if (margin < AMBIGUITY_MARGIN && best.distance > CONFIDENT_THRESHOLD) {
-            console.log(`[AI] ⚠️ Ambiguous: ${best.label}(${best.distance?.toFixed(2)}) vs ${sorted[1].label}(${sorted[1].distance?.toFixed(2)}) — unknown`);
-            return { label: 'unknown', distance: best.distance };
-        }
-    }
-    console.log(`[AI] ✅ Match → ${best.label} dist=${best.distance?.toFixed(2)}`);
-    return best;
+    return {
+        label: best.label,
+        distance: best.distance,
+        secondCandidate: second?.label,
+        secondDistance: second?.distance ?? null,
+        margin: second ? (second.distance - best.distance) : null,
+        reason: 'matched',
+        confidence: Math.round(Math.max(0, (1 - best.distance / MATCH_THRESHOLD) * 100)),
+    };
 }
-/**
- * Calls the Python Microservice to process the image.
- */
+function getFaceSuggestions(imagePath, labeledDescriptors) {
+    return [];
+}
+async function getFaceSuggestionsBatch(imagePaths, knownUsers) {
+    const rawResults = await fetchFacesFromPythonBatch(imagePaths);
+    console.log('[Batch] Matching against', knownUsers.length, 'users');
+    return rawResults.map((faces) => {
+        return faces.map((d) => {
+            const floatDescriptor = l2Normalize(new Float32Array(d.descriptor));
+            const match = findBestMatchWithMargin(floatDescriptor, knownUsers);
+            const userData = parseLabelToUser(match.label);
+            const suggestions = [];
+            if (userData && match.reason === 'matched') {
+                suggestions.push({
+                    id: userData.id,
+                    name: userData.name,
+                    label: match.label,
+                    confidence: match.confidence ?? 0,
+                    distance: match.distance != null ? Number(match.distance.toFixed(4)) : null,
+                });
+            }
+            return {
+                box: d.box,
+                confidence: match.confidence ?? 0,
+                isConfident: (match.confidence ?? 0) >= AUTO_TAG_THRESHOLD && match.reason === 'matched',
+                topSuggestion: suggestions[0] || null,
+                allSuggestions: suggestions.slice(0, 3),
+                label: match.label,
+                reason: match.reason || null,
+            };
+        });
+    });
+}
 async function fetchFacesFromPython(imagePath) {
     try {
         const fileBuffer = fs.readFileSync(imagePath);
@@ -138,31 +167,54 @@ async function fetchFacesFromPython(imagePath) {
             body: formData
         });
         if (!res.ok) {
-            console.error(`[AI Engine] Error response from Python API: ${res.statusText}`);
+            console.error('[AI] Error:', res.statusText);
             return [];
         }
         const data = await res.json();
         return data.faces || [];
     }
     catch (err) {
-        if (err.cause && err.cause.code === 'ECONNREFUSED') {
-            console.error(`\n🚨 [CRITICAL AI ERROR] Could not reach the Python Background AI at ${AI_API_URL}.`);
-            console.error(`🚨 Please make sure you have run 'python main.py' inside the 'ai_service' folder!\n`);
-        }
-        else {
-            console.error('[AI Engine] Failed to fetch faces from microservice:', err.message);
-        }
+        console.error('[AI] Failed:', err.message);
         return [];
     }
 }
-/**
- * Get the single best/largest face descriptor from an image (for profile pictures).
- */
+async function fetchFacesFromPythonBatch(imagePaths) {
+    if (imagePaths.length === 0)
+        return [];
+    if (imagePaths.length === 1) {
+        const faces = await fetchFacesFromPython(imagePaths[0]);
+        return [faces];
+    }
+    try {
+        const formData = new FormData();
+        for (const imgPath of imagePaths) {
+            const fileBuffer = fs.readFileSync(imgPath);
+            const blob = new Blob([fileBuffer], { type: 'image/jpeg' });
+            formData.append('files', blob, path.basename(imgPath));
+        }
+        const res = await fetch(AI_BATCH_URL, {
+            method: 'POST',
+            body: formData,
+        });
+        if (!res.ok) {
+            throw new Error('Batch failed');
+        }
+        const batchResults = (await res.json());
+        return batchResults.map(r => r.faces || []);
+    }
+    catch (err) {
+        console.warn('[AI] Batch fallback:', err.message);
+        const results = [];
+        for (const imgPath of imagePaths) {
+            results.push(await fetchFacesFromPython(imgPath));
+        }
+        return results;
+    }
+}
 async function getFaceDescriptor(imagePath) {
     const faces = await fetchFacesFromPython(imagePath);
     if (!faces || faces.length === 0)
         return null;
-    // Pick the most prominent face by area size
     const best = faces.reduce((prev, cur) => {
         const area = cur.box._width * cur.box._height;
         return (!prev || area > prev.area) ? { det: cur, area } : prev;
@@ -176,9 +228,6 @@ async function identifyFace(targetImagePath, knownUsers) {
     const best = findBestMatchWithMargin(descriptor, knownUsers);
     return best.label === 'unknown' ? null : best;
 }
-/**
- * Detect & identify ALL faces in an image
- */
 async function identifyAllFaces(targetImagePath, knownUsers) {
     const faces = await fetchFacesFromPython(targetImagePath);
     if (!faces || faces.length === 0)
@@ -193,24 +242,29 @@ async function identifyAllFaces(targetImagePath, knownUsers) {
         };
     });
 }
-/**
- * Just return all descriptor arrays.
- */
 async function getAllDescriptors(imagePath) {
     const faces = await fetchFacesFromPython(imagePath);
     return faces.map((d) => l2Normalize(new Float32Array(d.descriptor)));
 }
-/**
- * Core function for bulk gallery scanning
- */
 async function detectFaces(imagePath) {
     const faces = await fetchFacesFromPython(imagePath);
     const filename = path.basename(imagePath);
-    console.log(`[detectFaces] ${filename}: Python Engine found ${faces.length} high-quality face(s)`);
+    console.log(`[detectFaces] ${filename}: ${faces.length} face(s)`);
     return faces.map((d) => ({
         descriptor: l2Normalize(new Float32Array(d.descriptor)),
         box: d.box,
     }));
+}
+async function detectFacesBatch(imagePaths) {
+    const rawResults = await fetchFacesFromPythonBatch(imagePaths);
+    return rawResults.map((faces, idx) => {
+        const filename = path.basename(imagePaths[idx]);
+        console.log(`[detectFacesBatch] ${filename}: ${faces.length} face(s)`);
+        return faces.map((d) => ({
+            descriptor: l2Normalize(new Float32Array(d.descriptor)),
+            box: d.box,
+        }));
+    });
 }
 exports.default = {
     getFaceDescriptor,
@@ -218,11 +272,16 @@ exports.default = {
     identifyAllFaces,
     getAllDescriptors,
     detectFaces,
+    detectFacesBatch,
     serializeDescriptor,
     deserializeDescriptor,
     findBestMatchWithMargin,
     loadModels,
+    getFaceSuggestions,
+    getFaceSuggestionsBatch,
     MATCH_THRESHOLD,
+    AUTO_TAG_THRESHOLD,
     euclideanDistance,
+    parseLabelToUser,
 };
 //# sourceMappingURL=faceAi.js.map

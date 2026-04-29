@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { galleryService } from '../services/galleryService';
+import { galleryService, syncState } from '../services/galleryService';
 
 const galleryController = {
   async list(req: Request, res: Response) {
@@ -45,8 +45,13 @@ const galleryController = {
   },
 
   async upload(req: Request, res: Response) {
-    const gallery = await galleryService.uploadGallery(req.files as any || [], req.query.userId);
-    res.json(gallery);
+    const result = await galleryService.uploadGallery(req.files as any || [], req.query.userId);
+
+    if (typeof result === 'object' && result !== null && 'gallery' in result && 'suggestions' in result) {
+      res.json(result);
+    } else {
+      res.json(result);
+    }
   },
 
   async refreshRecognition(req: Request, res: Response) {
@@ -57,11 +62,11 @@ const galleryController = {
       console.error('Background Sync Error:', err);
     });
 
-    res.status(202).json({ message: 'Background sync started', status: galleryService.syncState });
+    res.status(202).json({ message: 'Background sync started', status: syncState });
   },
 
   async syncStatus(req: Request, res: Response) {
-    res.json(galleryService.syncState);
+    res.json(syncState);
   },
 
   async tagFace(req: Request, res: Response) {
@@ -127,6 +132,26 @@ const galleryController = {
 
   async resetIgnored(req: Request, res: Response) {
     const result = await galleryService.resetIgnoredFaces();
+    res.json(result);
+  },
+
+  async getTagSuggestions(req: Request, res: Response) {
+    const id = Number(req.params.id);
+    if (!id || isNaN(id)) {
+      res.status(400).json({ error: 'Valid gallery id is required.' });
+      return;
+    }
+    const suggestions = await galleryService.getTagSuggestions(id);
+    res.json(suggestions);
+  },
+
+  async ignoreReview(req: Request, res: Response) {
+    const id = Number(req.params.id);
+    if (!id || isNaN(id)) {
+      res.status(400).json({ error: 'Valid gallery id is required.' });
+      return;
+    }
+    const result = await galleryService.ignoreGalleryReview(id);
     res.json(result);
   },
 

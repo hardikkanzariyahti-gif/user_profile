@@ -41,6 +41,14 @@ const faceAi_1 = __importDefault(require("../../faceAi"));
 const constants_1 = require("../config/constants");
 const userRepository_1 = __importDefault(require("../repositories/userRepository"));
 const galleryService_1 = require("./galleryService");
+function toMatchScore(distance) {
+    // Distance is not a probability. Convert it to a bounded score for display only.
+    const threshold = Number(faceAi_1.default.MATCH_THRESHOLD || 1);
+    if (!Number.isFinite(distance) || threshold <= 0)
+        return 0;
+    const normalized = 1 - (distance / threshold);
+    return Number(Math.max(0, Math.min(1, normalized)).toFixed(2));
+}
 const faceService = {
     async identifyImage(filePath) {
         const users = await userRepository_1.default.findAllForRecognition();
@@ -70,7 +78,11 @@ const faceService = {
                     email: matchedUser.email,
                     profilePicture: matchedUser.profile_picture,
                     ['profile picture']: matchedUser.profile_picture,
-                    confidence: Number((1 - match.distance).toFixed(2)),
+                    confidence: toMatchScore(match.distance),
+                    matchDistance: match.distance,
+                    secondBestDistance: match.secondDistance ?? null,
+                    ambiguityMargin: match.margin ?? null,
+                    matchReason: match.reason ?? 'matched',
                 });
             }
         }

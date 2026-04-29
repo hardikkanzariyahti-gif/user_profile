@@ -4,6 +4,14 @@ import { UPLOADS_DIR } from '../config/constants';
 import userRepository from '../repositories/userRepository';
 import { buildLabeledDescriptors } from './galleryService';
 
+function toMatchScore(distance: number): number {
+  // Distance is not a probability. Convert it to a bounded score for display only.
+  const threshold = Number(faceAi.MATCH_THRESHOLD || 1);
+  if (!Number.isFinite(distance) || threshold <= 0) return 0;
+  const normalized = 1 - (distance / threshold);
+  return Number(Math.max(0, Math.min(1, normalized)).toFixed(2));
+}
+
 const faceService = {
   async identifyImage(filePath: string) {
     const users = await userRepository.findAllForRecognition();
@@ -40,7 +48,11 @@ const faceService = {
           email: matchedUser.email,
           profilePicture: matchedUser.profile_picture,
           ['profile picture']: matchedUser.profile_picture,
-          confidence: Number((1 - match.distance).toFixed(2)),
+          confidence: toMatchScore(match.distance),
+          matchDistance: match.distance,
+          secondBestDistance: (match as any).secondDistance ?? null,
+          ambiguityMargin: (match as any).margin ?? null,
+          matchReason: (match as any).reason ?? 'matched',
         });
       }
     }

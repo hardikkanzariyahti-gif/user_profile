@@ -7,6 +7,7 @@ const router = Router();
 
 router.get('/', asyncHandler(galleryController.list));
 router.post('/', upload.array('gallery', 10), asyncHandler(galleryController.upload));
+router.get('/suggest/:id', asyncHandler(galleryController.getTagSuggestions));
 router.post('/refresh', asyncHandler(galleryController.refreshRecognition));
 router.get('/sync-status', asyncHandler(galleryController.syncStatus));
 router.post('/tag-face', asyncHandler(galleryController.tagFace));
@@ -19,6 +20,7 @@ router.post('/clusters/reset-ignored', asyncHandler(galleryController.resetIgnor
 router.get('/search', asyncHandler(galleryController.searchByHashtag));
 router.post('/:id/hashtags', asyncHandler(galleryController.setHashtags));
 router.get('/:id', asyncHandler(galleryController.getById));
+router.post('/ignore-review/:id', asyncHandler(galleryController.ignoreReview));
 router.delete('/:id', asyncHandler(galleryController.remove));
 
 

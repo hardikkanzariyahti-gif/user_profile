@@ -7,12 +7,16 @@ declare const faceService: {
         message: string;
         users: {
             id: string;
-            originalId: number;
-            name: string;
-            email: string;
-            profilePicture: string | null;
-            "profile picture": string | null;
+            originalId: any;
+            name: any;
+            email: any;
+            profilePicture: any;
+            "profile picture": any;
             confidence: number;
+            matchDistance: number;
+            secondBestDistance: any;
+            ambiguityMargin: any;
+            matchReason: any;
         }[];
         unknownCount: number;
     }>;

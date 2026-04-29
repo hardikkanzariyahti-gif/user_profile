@@ -10,6 +10,7 @@ const asyncHandler_1 = __importDefault(require("../utils/asyncHandler"));
 const router = (0, express_1.Router)();
 router.get('/', (0, asyncHandler_1.default)(galleryController_1.default.list));
 router.post('/', upload_1.default.array('gallery', 10), (0, asyncHandler_1.default)(galleryController_1.default.upload));
+router.get('/suggest/:id', (0, asyncHandler_1.default)(galleryController_1.default.getTagSuggestions));
 router.post('/refresh', (0, asyncHandler_1.default)(galleryController_1.default.refreshRecognition));
 router.get('/sync-status', (0, asyncHandler_1.default)(galleryController_1.default.syncStatus));
 router.post('/tag-face', (0, asyncHandler_1.default)(galleryController_1.default.tagFace));
@@ -22,6 +23,7 @@ router.post('/clusters/reset-ignored', (0, asyncHandler_1.default)(galleryContro
 router.get('/search', (0, asyncHandler_1.default)(galleryController_1.default.searchByHashtag));
 router.post('/:id/hashtags', (0, asyncHandler_1.default)(galleryController_1.default.setHashtags));
 router.get('/:id', (0, asyncHandler_1.default)(galleryController_1.default.getById));
+router.post('/ignore-review/:id', (0, asyncHandler_1.default)(galleryController_1.default.ignoreReview));
 router.delete('/:id', (0, asyncHandler_1.default)(galleryController_1.default.remove));
 exports.default = router;
 //# sourceMappingURL=galleryRoutes.js.map

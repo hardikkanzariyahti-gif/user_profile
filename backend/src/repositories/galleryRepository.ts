@@ -1,4 +1,4 @@
-import prisma from '../config/prisma';
+import supabase from '../../supabase';
 
 interface GalleryItemData {
   url: string;
@@ -10,49 +10,92 @@ interface GalleryItemData {
   faceDescriptors?: any;
 }
 
+const mapItem = (item: any) => {
+  if (!item) return item;
+  const mapped = { ...item };
+  if (item.face_descriptors !== undefined) {
+    mapped.faceDescriptors = item.face_descriptors;
+  }
+  return mapped;
+};
+
+const mapToDb = (data: any) => {
+  const dbData = { ...data };
+  if (data.faceDescriptors !== undefined) {
+    dbData.face_descriptors = data.faceDescriptors;
+    delete dbData.faceDescriptors;
+  }
+  return dbData;
+};
 
 const galleryRepository = {
-  findAll() {
-    return prisma.galleryItem.findMany({
-      orderBy: { uploadedAt: 'desc' },
-    });
+  async findAll() {
+    const { data, error } = await supabase
+      .from('gallery')
+      .select('*')
+      .order('uploadedAt', { ascending: false });
+    if (error) throw error;
+    return data.map(mapItem);
   },
 
-  findById(id: number) {
-    return prisma.galleryItem.findUnique({
-      where: { id },
-    });
+  async findById(id: number) {
+    const { data, error } = await supabase
+      .from('gallery')
+      .select('*')
+      .eq('id', id)
+      .single();
+    if (error) throw error;
+    return mapItem(data);
   },
 
-  findByHashtag(tag: string) {
-    return prisma.galleryItem.findMany({
-      where: {
-        hashtags: { has: tag },
-      },
-      orderBy: { uploadedAt: 'desc' },
-    });
+  async findByHashtag(tag: string) {
+    const { data, error } = await supabase
+      .from('gallery')
+      .select('*')
+      .contains('hashtags', [tag])
+      .order('uploadedAt', { ascending: false });
+    if (error) throw error;
+    return data.map(mapItem);
   },
 
-  updateById(id: number, data: any) {
-    return prisma.galleryItem.update({
-      where: { id },
-      data,
-    });
+  async updateById(id: number, data: any) {
+    const { data: updated, error } = await supabase
+      .from('gallery')
+      .update(mapToDb(data))
+      .eq('id', id)
+      .select()
+      .single();
+    if (error) throw error;
+    return mapItem(updated);
   },
 
-  createMany(items: GalleryItemData[]) {
-    return prisma.galleryItem.createMany({ data: items });
+  async createMany(items: GalleryItemData[]) {
+    const { data, error } = await supabase
+      .from('gallery')
+      .insert(items.map(mapToDb))
+      .select();
+    if (error) throw error;
+    return data.map(mapItem);
   },
 
-  createOne(data: GalleryItemData) {
-    return prisma.galleryItem.create({ data });
+  async createOne(data: GalleryItemData) {
+    const { data: created, error } = await supabase
+      .from('gallery')
+      .insert(mapToDb(data))
+      .select()
+      .single();
+    if (error) throw error;
+    return mapItem(created);
   },
 
-  deleteById(id: number) {
-    return prisma.galleryItem.delete({
-      where: { id },
-    });
+  async deleteById(id: number) {
+    const { error } = await supabase
+      .from('gallery')
+      .delete()
+      .eq('id', id);
+    if (error) throw error;
   },
 };
 
 export default galleryRepository;
+

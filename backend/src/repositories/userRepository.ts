@@ -1,4 +1,4 @@
-import prisma from '../config/prisma';
+import supabase from '../../supabase';
 
 interface UserData {
   name: string;
@@ -14,81 +14,116 @@ interface UserUpdateData {
   profileDescriptor?: any;
 }
 
+const mapUser = (user: any) => {
+  if (!user) return user;
+  const mapped = { ...user };
+  if (user["profile picture"] !== undefined) {
+    mapped.profile_picture = user["profile picture"];
+  }
+  if (user["profile_descriptor"] !== undefined) {
+    mapped.profileDescriptor = user["profile_descriptor"];
+  }
+  return mapped;
+};
 
 const userRepository = {
-  create(data: UserData) {
-    return prisma.user.create({ data });
+  async create(data: UserData) {
+    const { data: created, error } = await supabase
+      .from('users')
+      .insert(data)
+      .select()
+      .single();
+    if (error) throw error;
+    return mapUser(created);
   },
 
-  findByEmail(email: string) {
-    return prisma.user.findUnique({ where: { email } });
+  async findByEmail(email: string) {
+    const { data, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('email', email)
+      .single();
+    if (error && error.code !== 'PGRST116') throw error;
+    return mapUser(data) || null;
   },
 
-  findAll() {
-    return prisma.user.findMany({
-      orderBy: { id: 'desc' },
-    });
+  async findAll() {
+    const { data, error } = await supabase
+      .from('users')
+      .select('*')
+      .order('id', { ascending: false });
+    if (error) throw error;
+    return data.map(mapUser);
   },
 
-  findById(id: number) {
-    return prisma.user.findUnique({ where: { id } });
+  async findById(id: number) {
+    const { data, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('id', id)
+      .single();
+    if (error && error.code !== 'PGRST116') throw error;
+    return mapUser(data) || null;
   },
 
-  findManyByIds(ids: number[]) {
-    return prisma.user.findMany({
-      where: {
-        id: { in: ids },
-      },
-      select: {
-        id: true,
-        name: true,
-        profile_picture: true,
-      },
-    });
+  async findManyByIds(ids: number[]) {
+    const { data, error } = await supabase
+      .from('users')
+      .select('id, name, "profile picture"')
+      .in('id', ids);
+    if (error) throw error;
+    return data.map(mapUser);
   },
 
-  updateById(id: number, data: UserUpdateData) {
-    return prisma.user.update({
-      where: { id },
-      data,
-    });
+  async updateById(id: number, data: UserUpdateData) {
+    const dbData: any = { ...data };
+    if (data.profile_picture !== undefined) {
+      dbData["profile picture"] = data.profile_picture;
+      delete dbData.profile_picture;
+    }
+    if (data.profileDescriptor !== undefined) {
+      dbData["profile_descriptor"] = data.profileDescriptor;
+      delete dbData.profileDescriptor;
+    }
+
+    const { data: updated, error } = await supabase
+      .from('users')
+      .update(dbData)
+      .eq('id', id)
+      .select()
+      .single();
+    if (error) throw error;
+    return mapUser(updated);
   },
 
-  deleteById(id: number) {
-    return prisma.user.delete({ where: { id } });
+  async deleteById(id: number) {
+    const { error } = await supabase
+      .from('users')
+      .delete()
+      .eq('id', id);
+    if (error) throw error;
   },
 
-  findUsersWithProfilePicture() {
-    return prisma.user.findMany({
-      where: {
-        profile_picture: {
-          not: null,
-        },
-      },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        profile_picture: true,
-        profileDescriptor: true,
-      },
-    });
+  async findUsersWithProfilePicture() {
+    const { data, error } = await supabase
+      .from('users')
+      .select('id, name, email, "profile picture", profile_descriptor')
+      .not('"profile picture"', 'is', null);
+    if (error) throw error;
+    return data.map(mapUser);
   },
 
-  // Returns ALL users — used for building recognition model from tagged photos
-  // even users without profile pictures (they get bootstrapped from manual tags)
-  findAllForRecognition() {
-    return prisma.user.findMany({
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        profile_picture: true,
-        profileDescriptor: true,
-      },
-      orderBy: { id: 'asc' },
-    });
+  async findAllForRecognition() {
+    const { data, error } = await supabase
+      .from('users')
+      .select('id, name, email, "profile picture", profile_descriptor')
+      .order('id', { ascending: true });
+    if (error) throw error;
+    return data.map(mapUser);
   },
 };
 
 export default userRepository;
+
+
+

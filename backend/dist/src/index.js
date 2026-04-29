@@ -15,6 +15,11 @@ async function startServer() {
     const server = app_1.default.listen(constants_1.PORT, () => {
         console.log(`Server running on http://localhost:${constants_1.PORT}`);
     });
+    server.on('error', (err) => {
+        if (err.code === 'EADDRINUSE') {
+            console.error(`❌ Port ${constants_1.PORT} is busy. Please wait a moment for the old process to die or kill it manually.`);
+        }
+    });
     async function shutdown(signal) {
         console.log(`${signal} received. Shutting down...`);
         server.close(async () => {
@@ -24,6 +29,8 @@ async function startServer() {
     }
     process.on('SIGINT', () => shutdown('SIGINT'));
     process.on('SIGTERM', () => shutdown('SIGTERM'));
+    process.on('SIGUSR2', () => shutdown('SIGUSR2')); // Nodemon restart signal
+    process.on('SIGHUP', () => shutdown('SIGHUP'));
 }
 startServer().catch((err) => {
     console.error('Failed to start server:', err);

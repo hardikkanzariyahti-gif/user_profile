@@ -9,14 +9,14 @@ declare const albumRepository: {
         isGlobal?: boolean;
     }): Promise<{
         items: {
-            url: string;
             id: number;
             uploadedAt: Date;
-            label: string | null;
-            isProfile: boolean;
-            userId: number | null;
-            recognizedUserIds: number[];
             hashtags: string[];
+            label: string | null;
+            userId: number | null;
+            url: string;
+            isProfile: boolean;
+            recognizedUserIds: number[];
             faceDescriptors: import("@prisma/client/runtime/library").JsonValue | null;
         }[];
     } & {
@@ -29,21 +29,21 @@ declare const albumRepository: {
         createdAt: Date;
     }>;
     findById(id: number): import(".prisma/client").Prisma.Prisma__AlbumClient<({
-        user: {
-            name: string;
-            id: number;
-        };
         items: {
-            url: string;
             id: number;
             uploadedAt: Date;
-            label: string | null;
-            isProfile: boolean;
-            userId: number | null;
-            recognizedUserIds: number[];
             hashtags: string[];
+            label: string | null;
+            userId: number | null;
+            url: string;
+            isProfile: boolean;
+            recognizedUserIds: number[];
             faceDescriptors: import("@prisma/client/runtime/library").JsonValue | null;
         }[];
+        user: {
+            id: number;
+            name: string;
+        };
     } & {
         id: number;
         userId: number;
@@ -54,20 +54,20 @@ declare const albumRepository: {
         createdAt: Date;
     }) | null, null, import("@prisma/client/runtime/library").DefaultArgs>;
     findByShareId(shareId: string): import(".prisma/client").Prisma.Prisma__AlbumClient<({
+        items: {
+            id: number;
+            uploadedAt: Date;
+            hashtags: string[];
+            label: string | null;
+            userId: number | null;
+            url: string;
+            isProfile: boolean;
+            recognizedUserIds: number[];
+            faceDescriptors: import("@prisma/client/runtime/library").JsonValue | null;
+        }[];
         user: {
             name: string;
         };
-        items: {
-            url: string;
-            id: number;
-            uploadedAt: Date;
-            label: string | null;
-            isProfile: boolean;
-            userId: number | null;
-            recognizedUserIds: number[];
-            hashtags: string[];
-            faceDescriptors: import("@prisma/client/runtime/library").JsonValue | null;
-        }[];
     } & {
         id: number;
         userId: number;
@@ -78,20 +78,20 @@ declare const albumRepository: {
         createdAt: Date;
     }) | null, null, import("@prisma/client/runtime/library").DefaultArgs>;
     findAllByUserId(userId: number): import(".prisma/client").Prisma.PrismaPromise<({
+        items: {
+            id: number;
+            uploadedAt: Date;
+            hashtags: string[];
+            label: string | null;
+            userId: number | null;
+            url: string;
+            isProfile: boolean;
+            recognizedUserIds: number[];
+            faceDescriptors: import("@prisma/client/runtime/library").JsonValue | null;
+        }[];
         user: {
             name: string;
         };
-        items: {
-            url: string;
-            id: number;
-            uploadedAt: Date;
-            label: string | null;
-            isProfile: boolean;
-            userId: number | null;
-            recognizedUserIds: number[];
-            hashtags: string[];
-            faceDescriptors: import("@prisma/client/runtime/library").JsonValue | null;
-        }[];
     } & {
         id: number;
         userId: number;
@@ -116,14 +116,14 @@ declare const albumRepository: {
         itemIds?: number[];
     }): import(".prisma/client").Prisma.Prisma__AlbumClient<{
         items: {
-            url: string;
             id: number;
             uploadedAt: Date;
-            label: string | null;
-            isProfile: boolean;
-            userId: number | null;
-            recognizedUserIds: number[];
             hashtags: string[];
+            label: string | null;
+            userId: number | null;
+            url: string;
+            isProfile: boolean;
+            recognizedUserIds: number[];
             faceDescriptors: import("@prisma/client/runtime/library").JsonValue | null;
         }[];
     } & {

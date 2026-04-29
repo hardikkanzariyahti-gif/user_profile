@@ -40,8 +40,13 @@ const galleryController = {
         res.json(results);
     },
     async upload(req, res) {
-        const gallery = await galleryService_1.galleryService.uploadGallery(req.files || [], req.query.userId);
-        res.json(gallery);
+        const result = await galleryService_1.galleryService.uploadGallery(req.files || [], req.query.userId);
+        if (typeof result === 'object' && result !== null && 'gallery' in result && 'suggestions' in result) {
+            res.json(result);
+        }
+        else {
+            res.json(result);
+        }
     },
     async refreshRecognition(req, res) {
         const forceRescan = req.query.forceRescan === 'true' || req.body?.forceRescan === true;
@@ -49,10 +54,10 @@ const galleryController = {
         galleryService_1.galleryService.refreshGalleryRecognition(forceRescan).catch(err => {
             console.error('Background Sync Error:', err);
         });
-        res.status(202).json({ message: 'Background sync started', status: galleryService_1.galleryService.syncState });
+        res.status(202).json({ message: 'Background sync started', status: galleryService_1.syncState });
     },
     async syncStatus(req, res) {
-        res.json(galleryService_1.galleryService.syncState);
+        res.json(galleryService_1.syncState);
     },
     async tagFace(req, res) {
         const galleryItemId = Number(req.body.galleryItemId);
@@ -111,6 +116,24 @@ const galleryController = {
     },
     async resetIgnored(req, res) {
         const result = await galleryService_1.galleryService.resetIgnoredFaces();
+        res.json(result);
+    },
+    async getTagSuggestions(req, res) {
+        const id = Number(req.params.id);
+        if (!id || isNaN(id)) {
+            res.status(400).json({ error: 'Valid gallery id is required.' });
+            return;
+        }
+        const suggestions = await galleryService_1.galleryService.getTagSuggestions(id);
+        res.json(suggestions);
+    },
+    async ignoreReview(req, res) {
+        const id = Number(req.params.id);
+        if (!id || isNaN(id)) {
+            res.status(400).json({ error: 'Valid gallery id is required.' });
+            return;
+        }
+        const result = await galleryService_1.galleryService.ignoreGalleryReview(id);
         res.json(result);
     },
 };

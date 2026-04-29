@@ -15,6 +15,8 @@ declare const galleryController: {
     setProfilePictureFromGalleryItem(req: Request, res: Response): Promise<void>;
     ignoreCluster(req: Request, res: Response): Promise<void>;
     resetIgnored(req: Request, res: Response): Promise<void>;
+    getTagSuggestions(req: Request, res: Response): Promise<void>;
+    ignoreReview(req: Request, res: Response): Promise<void>;
 };
 export default galleryController;
 //# sourceMappingURL=galleryController.d.ts.map
