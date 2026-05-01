@@ -7,14 +7,14 @@ declare const albumService: {
         isGlobal?: boolean;
     }): Promise<{
         items: {
+            url: string;
             id: number;
             uploadedAt: Date;
-            hashtags: string[];
             label: string | null;
-            userId: number | null;
-            url: string;
             isProfile: boolean;
+            userId: number | null;
             recognizedUserIds: number[];
+            hashtags: string[];
             faceDescriptors: import("@prisma/client/runtime/library").JsonValue | null;
         }[];
     } & {
@@ -27,20 +27,20 @@ declare const albumService: {
         createdAt: Date;
     }>;
     getAlbumsByUser(userId: number): Promise<({
-        items: {
-            id: number;
-            uploadedAt: Date;
-            hashtags: string[];
-            label: string | null;
-            userId: number | null;
-            url: string;
-            isProfile: boolean;
-            recognizedUserIds: number[];
-            faceDescriptors: import("@prisma/client/runtime/library").JsonValue | null;
-        }[];
         user: {
             name: string;
         };
+        items: {
+            url: string;
+            id: number;
+            uploadedAt: Date;
+            label: string | null;
+            isProfile: boolean;
+            userId: number | null;
+            recognizedUserIds: number[];
+            hashtags: string[];
+            faceDescriptors: import("@prisma/client/runtime/library").JsonValue | null;
+        }[];
     } & {
         id: number;
         userId: number;
@@ -51,21 +51,21 @@ declare const albumService: {
         createdAt: Date;
     })[]>;
     getAlbumById(id: number, userId: number): Promise<{
+        user: {
+            name: string;
+            id: number;
+        };
         items: {
+            url: string;
             id: number;
             uploadedAt: Date;
-            hashtags: string[];
             label: string | null;
-            userId: number | null;
-            url: string;
             isProfile: boolean;
+            userId: number | null;
             recognizedUserIds: number[];
+            hashtags: string[];
             faceDescriptors: import("@prisma/client/runtime/library").JsonValue | null;
         }[];
-        user: {
-            id: number;
-            name: string;
-        };
     } & {
         id: number;
         userId: number;
@@ -76,20 +76,20 @@ declare const albumService: {
         createdAt: Date;
     }>;
     getSharedAlbum(shareId: string): Promise<{
-        items: {
-            id: number;
-            uploadedAt: Date;
-            hashtags: string[];
-            label: string | null;
-            userId: number | null;
-            url: string;
-            isProfile: boolean;
-            recognizedUserIds: number[];
-            faceDescriptors: import("@prisma/client/runtime/library").JsonValue | null;
-        }[];
         user: {
             name: string;
         };
+        items: {
+            url: string;
+            id: number;
+            uploadedAt: Date;
+            label: string | null;
+            isProfile: boolean;
+            userId: number | null;
+            recognizedUserIds: number[];
+            hashtags: string[];
+            faceDescriptors: import("@prisma/client/runtime/library").JsonValue | null;
+        }[];
     } & {
         id: number;
         userId: number;
@@ -114,14 +114,14 @@ declare const albumService: {
         itemIds?: number[];
     }): Promise<{
         items: {
+            url: string;
             id: number;
             uploadedAt: Date;
-            hashtags: string[];
             label: string | null;
-            userId: number | null;
-            url: string;
             isProfile: boolean;
+            userId: number | null;
             recognizedUserIds: number[];
+            hashtags: string[];
             faceDescriptors: import("@prisma/client/runtime/library").JsonValue | null;
         }[];
     } & {

@@ -70,3 +70,7 @@ export function setProfilePictureFromGalleryItem(galleryItemId: number, userId: 
     body: JSON.stringify({ galleryItemId, userId }),
   });
 }
+
+export function getTagSuggestions(galleryItemId: number): Promise<any> {
+  return request(`/api/gallery/suggest/${encodeURIComponent(String(galleryItemId))}`);
+}

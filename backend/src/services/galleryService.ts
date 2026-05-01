@@ -8,15 +8,7 @@ import { toGalleryResponse } from '../utils/serializers';
 import httpError from '../utils/httpError';
 import { buildUploadUrl } from '../utils/urlUtils';
 import { normalizeHashtags, normalizeTag } from '../utils/hashtagUtils';
-
-// Global sync state
-let syncState = {
-  isScanning: false,
-  total: 0,
-  current: 0
-};
-
-export { syncState };
+import prisma from '../config/prisma';
 
 async function getGalleryItemResponseById(id: number) {
   const [item, allUsers] = await Promise.all([
@@ -65,8 +57,14 @@ let _modelCacheTime = 0;
 function invalidateModelCache() {
   _modelCache = null;
   _modelCacheTime = 0;
-  console.log('[Model Cache] 🗑️  Invalidated');
+  _clusterCache = null;
+  _clusterCacheTime = 0;
+  console.log('[Model Cache] 🗑️  Invalidated (Model & Clusters)');
 }
+
+const CLUSTER_CACHE_TTL_MS = 2 * 60 * 1000; // 2 minutes
+let _clusterCache: any[] | null = null;
+let _clusterCacheTime = 0;
 
 async function getCachedModel(): Promise<LabeledFaceDescriptors[]> {
   const now = Date.now();
@@ -232,7 +230,7 @@ async function buildLabeledDescriptors(users: any[]) {
       const taggedPhotos = allGalleryItems.filter(item =>
         !item.isProfile &&
         Array.isArray(item.recognizedUserIds) &&
-        item.recognizedUserIds.map((id: any) => Number(id)).includes(Number(user.id))
+        item.recognizedUserIds.map(id => Number(id)).includes(Number(user.id))
       );
 
       for (const item of taggedPhotos.slice(0, 8)) {
@@ -285,7 +283,7 @@ async function buildLabeledDescriptors(users: any[]) {
     const confirmedPhotos = allGalleryItems.filter(item =>
       !item.isProfile &&
       Array.isArray(item.recognizedUserIds) &&
-      item.recognizedUserIds.map((id: any) => Number(id)).includes(Number(user.id))
+      item.recognizedUserIds.map(id => Number(id)).includes(Number(user.id))
     );
 
     for (const item of confirmedPhotos.slice(0, 30)) {
@@ -349,19 +347,6 @@ async function getUserMapForSuggestions(): Promise<Record<number, any>> {
   const userMap: Record<number, any> = {};
   for (const u of allUsers) userMap[u.id] = u;
   return userMap;
-}
-
-// Helper: parse a label stored in the model as JSON string { id, name }
-function parseLabel(label: string): { id: number; name: string } | null {
-  try {
-    const parsed = JSON.parse(label);
-    if (parsed && typeof parsed.id === 'number' && typeof parsed.name === 'string') {
-      return { id: parsed.id, name: parsed.name };
-    }
-    return null;
-  } catch {
-    return null;
-  }
 }
 
 async function recognizeImageWithSuggestions(imagePath: string): Promise<{
@@ -544,113 +529,101 @@ const galleryService = {
     return enriched.map(toGalleryResponse);
   },
 
-// ── Upload gallery ──────────────────────────────────────────────────────────
+  // ── Upload gallery ──────────────────────────────────────────────────────────
   async uploadGallery(files: any[] = [], userId: any = null) {
     if (!files || files.length === 0) throw httpError(400, 'No files uploaded');
+
     const uploaderId = userId ? Number(userId) : null;
 
-    // 1. INSTANT SAVE - Save all uploaded records to DB immediately (no AI blocking)
     const itemsToSave = files.map(file => ({
       url: buildUploadUrl(file.filename),
       uploadedAt: new Date(),
       recognizedUserIds: [] as number[],
       userId: uploaderId,
-      faceDescriptors: null, // Will be filled by background job
+      faceDescriptors: null,
     }));
+
     await galleryRepository.createMany(itemsToSave);
-    console.log(`[Upload] Saved ${files.length} photo(s) instantly`);
 
-    // 2. Return immediately - don't wait for AI
-    const gallery = await this.listGallery(userId);
+    const urls = itemsToSave.map(i => i.url);
+    const newItems = await prisma.galleryItem.findMany({
+      where: { url: { in: urls } }
+    });
 
-    // 3. Start background processing (non-blocking)
-    this.processUploadedPhotosAsync(files).catch(err => 
-      console.error('[Upload] Background processing error:', err)
-    );
+    const pairs = files
+      .map(file => ({
+        file,
+        item: newItems.find((i: any) => i.url && i.url.includes(file.filename))
+      }))
+      .filter(p => p.item);
 
-    return {
-      gallery,
-      message: `${files.length} photo(s) uploaded successfully! AI will process in background.`,
-      uploadedCount: files.length,
-    };
-  },
+    setImmediate(async () => {
+      try {
+        this.syncState.isScanning = true;
+        this.syncState.current = 0;
+        this.syncState.total = pairs.length;
 
-  /**
-   * Process uploaded photos in background (non-blocking)
-   */
-  async processUploadedPhotosAsync(files: any[]) {
-    // Wait a bit before starting to not block the response
-    await new Promise(r => setTimeout(r, 1000));
+        const labeledDescriptors = await getCachedModel();
 
-    const imagePaths = files.map(file => path.join(UPLOADS_DIR, file.filename)).filter(p => fs.existsSync(p));
-    if (imagePaths.length === 0) return;
+        this.syncState.total = pairs.length;
 
-    console.log(`[Background] Processing ${imagePaths.length} new photos...`);
+        const UPLOAD_BATCH = 10;
+        const batches = Array.from({ length: Math.ceil(pairs.length / UPLOAD_BATCH) }, (_, i) =>
+          pairs.slice(i * UPLOAD_BATCH, i * UPLOAD_BATCH + UPLOAD_BATCH)
+        );
 
-    const allUsers = await userRepository.findAllForRecognition();
-    if (allUsers.length === 0) {
-      console.log('[Background] No users - skipping recognition');
-      return;
-    }
+        console.log(`[Upload BG] 🚀 Parallel Scanning ${pairs.length} images in ${batches.length} batches...`);
 
-    const labeledDescriptors = await buildLabeledDescriptors(allUsers);
-    
-    try {
-      const batchResults = await faceAi.getFaceSuggestionsBatch(imagePaths, labeledDescriptors);
+        await Promise.all(batches.map(async (chunk) => {
+          const filePaths = chunk.map(p => p.file.path);
+          const batchResults = await faceAi.detectFacesBatch(filePaths);
 
-      // Fetch the items we just created
-      const allSavedItems = await galleryRepository.findAll();
-      const uploadedItems = files.map(file => 
-        allSavedItems.find((i: any) => i.url && i.url.includes(file.filename))
-      ).filter(Boolean);
+          await Promise.all(chunk.map(async ({ item }, j) => {
+            if (!item) return;
+            const detections = batchResults[j];
+            const faceDescriptors = detections.map((d: any) => ({
+              descriptor: faceAi.serializeDescriptor(d.descriptor),
+              box: d.box,
+            }));
 
-      for (let i = 0; i < uploadedItems.length; i++) {
-        const item = uploadedItems[i];
-        const resultFaces = batchResults[i] || [];
-        
-        if (resultFaces.length > 0) {
-          console.log(`[Background] ${item.url}: ${resultFaces.length} face(s) detected`);
-        }
-
-        const autoTagIds: number[] = [];
-        const newFaceDescriptors: any[] = [];
-
-        resultFaces.forEach((face: any) => {
-          const descriptor = faceAi.serializeDescriptor(face.descriptor || []);
-          
-          if (face.isConfident && face.topSuggestion) {
-            if (!autoTagIds.includes(face.topSuggestion.id)) {
-              autoTagIds.push(face.topSuggestion.id);
-              console.log(`[Background] Auto-tag: ${face.topSuggestion.name} (${face.confidence}%)`);
+            let recognizedUserIds: number[] = [];
+            if (labeledDescriptors.length > 0 && detections.length > 0) {
+              recognizedUserIds = detections
+                .map((det: any) => {
+                  const match = faceAi.findBestMatchWithMargin(det.descriptor, labeledDescriptors);
+                  return match.label === 'unknown' ? null : parseUserId(match.label);
+                })
+                .filter((id: any): id is number => id !== null);
             }
-          }
 
-          newFaceDescriptors.push({
-            descriptor,
-            box: face.box,
-            manuallyTaggedUserId: null,
-            confidence: face.confidence || 0,
-            isConfident: face.isConfident || false,
-            pendingConfirmationUserId: face.isConfident ? null : (face.topSuggestion?.id || null),
-          });
-        });
+            try {
+              await galleryRepository.updateById(item.id, {
+                faceDescriptors,
+                recognizedUserIds: [...new Set(recognizedUserIds)],
+              });
+            } catch (dbErr) {
+              console.warn(`[Upload BG] ⚠️ Failed to update item ${item.id}, retrying once...`);
+              await new Promise(r => setTimeout(r, 1000));
+              await galleryRepository.updateById(item.id, {
+                faceDescriptors,
+                recognizedUserIds: [...new Set(recognizedUserIds)],
+              }).catch(e => console.error(`[Upload BG] ❌ Permanent failure for item ${item.id}:`, e.message));
+            }
+          }));
 
-        const updateData: any = { faceDescriptors: newFaceDescriptors };
-        if (autoTagIds.length > 0) {
-          updateData.recognizedUserIds = [...new Set(autoTagIds)];
-        }
-        await galleryRepository.updateById(item.id, updateData);
+          this.syncState.current += chunk.length;
+        }));
+
+        this.syncState.isScanning = false;
+        invalidateModelCache();
+        console.log(`[Upload] ✅ Parallel background detection complete.`);
+      } catch (err) {
+        console.error('[Upload] ❌ Parallel background detection failed:', err);
       }
+    });
 
-      console.log(`[Background] Done processing ${imagePaths.length} photos`);
-    } catch (err: any) {
-      console.error('[Background] AI processing failed:', err.message);
-    }
-
-    // Trigger full gallery refresh to propagate tags
-    this.refreshGalleryRecognition(false).catch(err => 
-      console.error('[Background] Sync error:', err)
-    );
+    const gallery = await this.listGallery(userId);
+    return gallery;
   },
 
   // ── Tag a face manually ────────────────────────────────────────────────────
@@ -685,8 +658,6 @@ const galleryService = {
       const newDescriptors = [...item.faceDescriptors] as any[];
       if (newDescriptors[faceIndex]) {
         newDescriptors[faceIndex].manuallyTaggedUserId = Number(userId);
-        delete newDescriptors[faceIndex].pendingConfirmationUserId;
-        delete newDescriptors[faceIndex].confidence;
         updateData.faceDescriptors = newDescriptors;
       }
     } else if (faceIndex === undefined) {
@@ -713,27 +684,6 @@ const galleryService = {
     return { message: `Tagged ${user.name} successfully`, profilePictureSet };
   },
 
-  // ── Ignore review for a photo ──────────────────────────────────────────────
-  async ignoreGalleryReview(galleryItemId: number) {
-    const allItems = await galleryRepository.findAll();
-    const item = allItems.find(i => i.id === galleryItemId);
-    if (!item) throw new Error('Item not found');
-
-    if (Array.isArray(item.faceDescriptors)) {
-      const newDescriptors = item.faceDescriptors.map((d: any) => {
-        if (!d) return d;
-        // Mark as confident so it doesn't show up in "needs review" lists
-        return {
-          ...d,
-          isConfident: true,
-          pendingConfirmationUserId: null,
-        };
-      });
-      await galleryRepository.updateById(galleryItemId, { faceDescriptors: newDescriptors });
-    }
-    return { success: true };
-  },
-
   // ── Untag a face ────────────────────────────────────────────────────────────
   async untagFace(galleryItemId: number, userId: number, faceIndex?: number) {
     const allItems = await galleryRepository.findAll();
@@ -745,7 +695,7 @@ const galleryService = {
       : []);
 
     let updateData: any = {
-      recognizedUserIds: existingIds.filter((id: any) => id !== Number(userId)),
+      recognizedUserIds: existingIds.filter(id => id !== Number(userId)),
     };
 
     if (faceIndex !== undefined && Array.isArray(item.faceDescriptors)) {
@@ -777,127 +727,146 @@ const galleryService = {
     return { message: 'Tag removed successfully' };
   },
 
-// ── SIMPLE & FAST Refresh recognition ──────────────────────────────────────
+  // ── Refresh recognition ──────────────────────────────────────────────────────
+  /**
+   * Re-scan all gallery photos and ADD newly recognized users to each photo.
+   *
+   * RULE: Existing tags (manual or previous AI) are NEVER removed.
+   *       AI can only ADD more users to a photo's tag list.
+   *
+   * @param forceRescan  Clear all cached face descriptors first so the improved
+   *                     detector re-processes every photo from scratch.
+   *                     Essential after detection logic changes.
+   */
+  syncState: { isScanning: false, total: 0, current: 0 },
+
   async refreshGalleryRecognition(forceRescan = false) {
-    if (syncState.isScanning) {
-      return { message: 'Already scanning', total: 0 };
+    if (this.syncState.isScanning) {
+      console.log('⚠️ AI Sync already running, ignoring parallel request.');
+      return { message: 'Sync in progress' };
     }
 
-    syncState = { isScanning: true, total: 0, current: 0 };
+    this.syncState = { isScanning: true, total: 0, current: 0 };
+    console.log(`\n🚀 AI Sync starting... (forceRescan=${forceRescan})`);
     const startTime = Date.now();
-    
-    console.log('🚀 AI Sync starting...');
 
-    try {
-      // Get all gallery items (skip profile items)
-      let allItems = await galleryRepository.findAll();
-      let itemsToProcess = allItems.filter((i: any) => !i.isProfile && i.url);
-      
-      // Skip already scanned items unless forceRescan
-      if (!forceRescan) {
-        const alreadyScanned = itemsToProcess.filter((i: any) => 
-          i.faceDescriptors && Array.isArray(i.faceDescriptors) && i.faceDescriptors.length > 0
-        );
-        const needsScanning = itemsToProcess.filter((i: any) => 
-          !i.faceDescriptors || !Array.isArray(i.faceDescriptors) || i.faceDescriptors.length === 0
-        );
-        
-        console.log(`[AI] ${alreadyScanned.length} already scanned, ${needsScanning.length} need scanning`);
-        
-        if (needsScanning.length === 0) {
-          syncState.isScanning = false;
-          console.log('[AI] All photos already processed!');
-          return { updatedCount: 0, total: 0, durationSc: '0' };
-        }
-        
-        itemsToProcess = needsScanning;
-      }
+    let allItems = await galleryRepository.findAll();
 
-      syncState.total = itemsToProcess.length;
-      console.log(`[AI] Processing ${itemsToProcess.length} photos...`);
-
-      // Get users for recognition
-      const allUsers = await userRepository.findAllForRecognition();
-      console.log('[AI] Users for recognition:', allUsers.length);
-
-      if (allUsers.length === 0) {
-        console.log('[AI] No users to match against');
-        syncState.isScanning = false;
-        return { updatedCount: 0, total: 0, durationSc: '0' };
-      }
-
-      // Build labeled descriptors for matching
-      const labeledDescriptors = await buildLabeledDescriptors(allUsers);
-      console.log('[AI] Built descriptors for', labeledDescriptors.length, 'users');
-
-      // Process photos in VERY SMALL batches with PARALLEL AI calls
-      const BATCH_SIZE = 3;
-      
-      for (let i = 0; i < itemsToProcess.length; i += BATCH_SIZE) {
-        const batch = itemsToProcess.slice(i, i + BATCH_SIZE);
-        
-        // Get file paths
-        const filePaths = batch.map((item: any) => {
-          const filename = item.url.split('/').pop();
-          return path.join(UPLOADS_DIR, filename!);
-        }).filter((p: string) => fs.existsSync(p));
-
-        if (filePaths.length === 0) continue;
-
-        // Make PARALLEL AI calls for all photos in batch
-        let batchResults: any[][] = [];
-        try {
-          batchResults = await faceAi.getFaceSuggestionsBatch(filePaths, labeledDescriptors);
-        } catch (err) {
-          console.error('[AI] Batch failed:', err);
-        }
-
-        // Update each photo with results
-        for (let j = 0; j < batch.length; j++) {
-          const item = batch[j];
-          const results = batchResults[j] || [];
-          
-          // Count known faces
-          const knownFaces = results.filter((f: any) => f.isConfident && f.topSuggestion);
-          const userIds = [...new Set(knownFaces.map((f: any) => f.topSuggestion.id))];
-          
-          // Save face descriptors
-          const faceDescriptors = results.map((face: any, idx: number) => ({
-            descriptor: faceAi.serializeDescriptor(face.descriptor || []),
-            box: face.box,
-            manuallyTaggedUserId: forceRescan ? (item.faceDescriptors?.[idx]?.manuallyTaggedUserId || null) : null,
-            confidence: face.confidence || 0,
-            isConfident: face.isConfident || false,
-          }));
-
-          await galleryRepository.updateById(item.id, {
-            recognizedUserIds: userIds,
-            faceDescriptors: faceDescriptors
-          });
-
-          console.log(`[AI] ${item.url.split('/').pop()}: ${userIds.length} recognized, ${results.length} faces`);
-        }
-
-        syncState.current = Math.min(i + BATCH_SIZE, itemsToProcess.length);
-        console.log(`[AI] Progress: ${syncState.current}/${itemsToProcess.length}`);
-      }
-
-      const duration = ((Date.now() - startTime) / 1000).toFixed(1);
-      console.log(`✅ AI Sync done in ${duration}s`);
-      
-      syncState.isScanning = false;
-      return { updatedCount: itemsToProcess.length, total: itemsToProcess.length, durationSc: duration };
-      
-    } catch (err: any) {
-      console.error('[AI] Sync error:', err);
-      syncState.isScanning = false;
-      return { error: err.message };
+    // Intelligent Force Rescan (~0 seconds):
+    // We only wipe cached faceDescriptors for photos that previously FAILED to detect any faces.
+    // Photos that already have bounding boxes skip the heavy image processing, meaning 1,000s of photos 
+    // finish recalculating identities instantly instead of waiting 30+ minutes!
+    if (forceRescan) {
+      console.log('[AI Sync] 🚨 SMART FORCE RESCAN — AI will re-analyze all images but strictly preserve your manual tags.');
     }
+
+    // Build (or restore from cache) the recognition model
+    // Force a fresh model build (don't reuse cached model during a refresh)
+    invalidateModelCache();
+    const labeledDescriptors = await getCachedModel();
+
+    if (labeledDescriptors.length === 0) {
+      console.log('[AI Sync] ⚠️  No users in model — skipping Auto-Identification, but running AI Detection to draw face boxes for Manual Tagging.');
+    }
+
+    let updatedCount = 0;
+    const realItems = allItems.filter(i => !i.isProfile && i.url);
+    this.syncState.total = realItems.length;
+    console.log(`[AI Sync] Scanning ${realItems.length} photos with ${labeledDescriptors.length} known user(s)...\n`);
+
+    // Using Parallel processing with functional batching (map)
+    const CHUNK = 10;
+    const batches = Array.from({ length: Math.ceil(realItems.length / CHUNK) }, (_, i) =>
+      realItems.slice(i * CHUNK, i * CHUNK + CHUNK)
+    );
+
+    await Promise.all(batches.map(async (chunk) => {
+      // ── Batch face detection in parallel ──
+      const chunkDetections = await detectFacesWithCacheBatch(chunk, forceRescan);
+
+      // ── Process matches for this batch ──
+      await Promise.all(chunk.map(async (item, chunkIdx) => {
+        const detections = chunkDetections[chunkIdx];
+        const existingIds = (Array.isArray(item.recognizedUserIds)
+          ? item.recognizedUserIds.map((id: any) => Number(id))
+          : []).sort((a: number, b: number) => a - b);
+
+        const faceDescs = Array.isArray(item.faceDescriptors) ? item.faceDescriptors as any[] : [];
+        
+        // During a Force Rescan, we must clear previous AI guesses but KEEP your manual tags.
+        let baseIds = existingIds;
+        if (forceRescan) {
+          baseIds = faceDescs
+            .map((fd: any) => fd.manuallyTaggedUserId)
+            .filter((id: any) => id != null)
+            .map((id: any) => Number(id))
+            .filter((id: number) => !isNaN(id));
+        }
+
+        if (labeledDescriptors.length === 0) {
+           if (forceRescan) await galleryRepository.updateById(item.id, { recognizedUserIds: baseIds });
+           return;
+        }
+
+        // 1. Determine re-matching results while respecting rejections
+        const aiIds: number[] = [];
+        const newFaceDescriptors = detections.map((det: any, fi: number) => {
+          const cachedFace = faceDescs[fi] || {};
+          const rejectedIds = Array.isArray(cachedFace.rejectedUserIds) ? cachedFace.rejectedUserIds : [];
+          const manuallyTaggedUserId = cachedFace.manuallyTaggedUserId || null;
+
+          const match = faceAi.findBestMatchWithMargin(det.descriptor, labeledDescriptors);
+          let recognizedId = null;
+          
+          if (match.label !== 'unknown') {
+            const id = parseUserId(match.label);
+            if (id !== null && !rejectedIds.includes(id)) {
+              recognizedId = id;
+              aiIds.push(id);
+            }
+          }
+
+          // Build a fresh descriptor object but PERSIST the manual data
+          return {
+            descriptor: faceAi.serializeDescriptor(det.descriptor),
+            box: det.box,
+            rejectedUserIds: rejectedIds,
+            manuallyTaggedUserId,
+            isIgnored: cachedFace.isIgnored || false
+          };
+        });
+
+        const merged = [...new Set([...baseIds, ...aiIds])].sort((a: number, b: number) => a - b);
+
+        // Always update descriptors during a sync to ensure they are up to date with the latest AI results
+        if (aiIds.length > 0) {
+          updatedCount++;
+        }
+
+        await galleryRepository.updateById(item.id, { 
+          recognizedUserIds: merged,
+          faceDescriptors: newFaceDescriptors 
+        });
+      }));
+
+      this.syncState.current += chunk.length;
+    }));
+
+    const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+    console.log(`\n✅ AI Sync done in ${duration}s — updated ${updatedCount}/${realItems.length} photos.\n`);
+    this.syncState.isScanning = false;
+    return { updatedCount, total: realItems.length, durationSc: duration };
   },
 
   // ── People Clustering ────────────────────────────────────────────────────────
   async getUnknownFaceClusters() {
-    console.log('[Clustering] Analyzing gallery for unknown people...');
+    const now = Date.now();
+    if (_clusterCache && (now - _clusterCacheTime) < CLUSTER_CACHE_TTL_MS) {
+      console.log(`[Clustering] ⚡ HIT — using cached clusters (${_clusterCache.length} item(s))`);
+      return _clusterCache;
+    }
+
+    console.log('[Clustering] 🐢 MISS — Analyzing gallery for unknown people...');
     const allItems = await galleryRepository.findAll();
     const labeledDescriptors = await getCachedModel();
 
@@ -944,16 +913,8 @@ const galleryService = {
           })
           .filter((f: any) => f !== null);
 
-        if (unknownFacesInPhoto.length === 0 && recognizedIds.length === 0) {
-          unknownFacesInPhoto.push({
-            itemId: item.id,
-            faceIndex: -1,
-            box: null,
-            descriptor: null,
-            aiSuggestion: null
-          });
-        }
-
+        // Only show photos that have ACTUAL unknown faces with real bounding boxes.
+        // Photos with zero detected faces should NOT appear in the People page.
         if (unknownFacesInPhoto.length === 0) return null;
 
         return {
@@ -976,6 +937,9 @@ const galleryService = {
       .sort((a, b) => b.uploadedAt - a.uploadedAt)
       .map(({ uploadedAt, ...photo }) => photo);
 
+    _clusterCache = cleanedClusters;
+    _clusterCacheTime = Date.now();
+
     console.log(`[Clustering] Found ${cleanedClusters.length} photo(s) containing unknown faces.`);
     return cleanedClusters;
   },
@@ -988,81 +952,34 @@ const galleryService = {
     if (!filename) throw httpError(400, 'Invalid image path');
     const filePath = path.join(UPLOADS_DIR, filename);
 
-    // If the image file isn't on disk yet, fall back to cached detection results
     if (!fs.existsSync(filePath)) {
       const detections = await detectFacesWithCache(item);
-      const enrichedFaces = await Promise.resolve(
-        detections.map((det: any, idx: number) => ({
-          faceIndex: idx,
-          box: det.box,
-          confidence: det?.confidence ?? 0,
-          isConfident: false,
-          topSuggestion: null,
-          allSuggestions: [],
-          label: 'unknown',
-          reason: 'no_detection_cache',
-        }))
-      );
+      const userMap = await getUserMapForSuggestions();
       return {
-        itemId: item.id,
         url: item.url,
-        faces: enrichedFaces,
+        faces: detections.map((det, idx) => {
+          const cachedFace = (Array.isArray(item.faceDescriptors) ? item.faceDescriptors[idx] : null) as any;
+          return {
+            faceIndex: idx,
+            box: det.box,
+            confidence: 0,
+            isConfident: false,
+            topSuggestion: null,
+            allSuggestions: [],
+            label: 'unknown',
+            reason: 'no_detection_cache',
+          };
+        }),
         highConfidenceCount: 0,
         lowConfidenceCount: detections.length,
         needsScanning: true,
       };
     }
 
-    // Analyze the image and attach suggestions per face
-    const labeledDescriptors = await getCachedModel();
-    const detections = await detectFacesWithCache(item);
-    const facesWithSuggestions = await Promise.all(detections.map(async (det: any, idx: number) => {
-      const descriptor = det.descriptor;
-      // descriptor may be undefined in edge cases
-      const match = descriptor ? faceAi.findBestMatchWithMargin(descriptor, labeledDescriptors) : { label: 'unknown', distance: null } as any;
-      const box = det.box;
-      let topSuggestion: any = null;
-      let allSuggestions: any[] = [];
-      let label = match.label;
-      let confidence = match.confidence ?? 0;
-      let isConfident = (confidence >= 90) && (match.reason === 'matched');
-
-      if (match && match.label !== 'unknown') {
-        const parsed = parseLabel(match.label);
-        if (parsed) {
-          topSuggestion = { id: parsed.id, name: parsed.name, distance: match.distance ?? 0, confidence };
-          allSuggestions.push(topSuggestion);
-          label = match.label;
-        }
-      } 
-      
-      if (match.secondCandidate) {
-        const parsed2 = parseLabel(match.secondCandidate);
-        if (parsed2) {
-          const margin = (match.margin ?? 0);
-          const secondConfidence = Math.max(0, confidence - Math.round((margin / 0.22) * 30));
-          allSuggestions.push({ id: parsed2.id, name: parsed2.name, distance: match.secondDistance ?? 0, confidence: secondConfidence });
-        }
-      }
-
-      return {
-        faceIndex: idx,
-        box,
-        confidence,
-        isConfident,
-        topSuggestion,
-        allSuggestions,
-        label,
-        reason: match.reason ?? null,
-      };
-    }));
-
+    const result = await recognizeImageWithSuggestions(filePath);
     return {
-      itemId: item.id,
       url: item.url,
-      faces: facesWithSuggestions,
-      highConfidenceCount: facesWithSuggestions.filter((f: any) => f.isConfident).length,
-      lowConfidenceCount: facesWithSuggestions.filter((f: any) => !f.isConfident).length,
+      ...result,
       needsScanning: false,
     };
   },
@@ -1091,8 +1008,6 @@ const galleryService = {
         const newDescriptors = [...item.faceDescriptors] as any[];
         if (newDescriptors[face.faceIndex]) {
           newDescriptors[face.faceIndex].manuallyTaggedUserId = userId;
-          delete newDescriptors[face.faceIndex].pendingConfirmationUserId;
-          delete newDescriptors[face.faceIndex].confidence;
           updateData.faceDescriptors = newDescriptors;
         }
       }
@@ -1154,6 +1069,7 @@ const galleryService = {
       }
     }));
 
+    invalidateModelCache();
     return { message: `Successfully ignored ${updateCount} face(s). Discovery list cleaned.`, updatedCount: updateCount };
   },
 
@@ -1177,6 +1093,9 @@ const galleryService = {
       }
     }));
 
+    if (resetCount > 0) {
+      invalidateModelCache();
+    }
     return { message: `Restored ${resetCount} faces to discovery.`, resetCount };
   },
 

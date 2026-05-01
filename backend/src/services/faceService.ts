@@ -50,9 +50,9 @@ const faceService = {
           ['profile picture']: matchedUser.profile_picture,
           confidence: toMatchScore(match.distance),
           matchDistance: match.distance,
-          secondBestDistance: (match as any).secondDistance ?? null,
-          ambiguityMargin: (match as any).margin ?? null,
-          matchReason: (match as any).reason ?? 'matched',
+          secondBestDistance: match.secondDistance ?? null,
+          ambiguityMargin: match.margin ?? null,
+          matchReason: match.reason ?? 'matched',
         });
       }
     }

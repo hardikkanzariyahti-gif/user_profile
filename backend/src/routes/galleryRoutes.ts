@@ -20,7 +20,6 @@ router.post('/clusters/reset-ignored', asyncHandler(galleryController.resetIgnor
 router.get('/search', asyncHandler(galleryController.searchByHashtag));
 router.post('/:id/hashtags', asyncHandler(galleryController.setHashtags));
 router.get('/:id', asyncHandler(galleryController.getById));
-router.post('/ignore-review/:id', asyncHandler(galleryController.ignoreReview));
 router.delete('/:id', asyncHandler(galleryController.remove));
 
 

@@ -59,9 +59,9 @@ export default function People() {
     }
   };
 
-  const fetchData = async () => {
+  const fetchData = async (silent = false) => {
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       const [clustersRes, usersRes] = await Promise.all([
         fetch(`${API_BASE}/gallery/clusters`),
         fetch(`${API_BASE}/users`)
@@ -70,7 +70,7 @@ export default function People() {
       const usersJson = await usersRes.json().catch(() => null);
       if (!clustersRes.ok) throw new Error(clustersJson?.error || 'Failed to load unknown people clusters.');
       if (!usersRes.ok) throw new Error(usersJson?.error || 'Failed to load users.');
-      
+
       const newUsers = Array.isArray(usersJson) ? usersJson : [];
       setClusters(Array.isArray(clustersJson) ? clustersJson : []);
       setUsers(newUsers);
@@ -79,7 +79,7 @@ export default function People() {
       setMessage({ type: 'error', text: 'Failed to load people data.' });
       return { clusters: [], users: [] };
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
@@ -126,19 +126,33 @@ export default function People() {
       return;
     }
     setMerging(true);
+    const facesToTag = [...selectedFaces];
+    const firstItemId = facesToTag[0].itemId;
+
+    // AUTO CLOSE INSTANTLY FOR FAST UX AND REMOVE CLUSTER OPTIMISTICALLY
+    const currentClusterId = selectedCluster.clusterId;
+    setSelectedCluster(null);
+    setClusters(prev => prev.filter(c => c.clusterId !== currentClusterId));
+
     try {
       const res = await fetch(`${API_BASE}/gallery/clusters/merge`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId, faces: selectedFaces })
+        body: JSON.stringify({ userId, faces: facesToTag })
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
 
-      setMessage({ type: 'success', text: `Success! Tagged ${selectedFaces.length} photos. AI is now auto-scanning the rest...` });
-      const freshData = await fetchData();
-      await maybeOfferProfilePictureFallback(userId, selectedFaces[0].itemId, freshData.users);
-      setSelectedCluster(null);
+      setMessage({ type: 'success', text: `Success! Tagged ${facesToTag.length} photos. AI is syncing the rest...` });
+      
+      // Trigger silent background AI sync without blocking
+      fetch(`${API_BASE}/gallery/refresh`, { method: 'POST' });
+
+      // Refresh data silently to show changes without blocking UI
+      const freshData = await fetchData(true);
+      
+      // Don't await the confirm dialog to avoid blocking
+      maybeOfferProfilePictureFallback(userId, firstItemId, freshData.users);
     } catch (err: any) {
       setMessage({ type: 'error', text: err.message || 'Merge failed.' });
     } finally {
@@ -148,6 +162,18 @@ export default function People() {
 
   const handleMergeOne = async (userId: number, face: { itemId: number; faceIndex: number }) => {
     setMerging(true);
+    
+    // Auto-remove the photo from the current cluster INSTANTLY
+    setClusters(prev => {
+      const newClusters = prev.map(c => {
+        if (c.clusterId === selectedCluster?.clusterId) {
+           return {...c, relatedPhotos: c.relatedPhotos.filter(p => !(p.itemId === face.itemId && p.faceIndex === face.faceIndex))}
+        }
+        return c;
+      });
+      return newClusters.filter(c => c.relatedPhotos.length > 0);
+    });
+
     try {
       const res = await fetch(`${API_BASE}/gallery/clusters/merge`, {
         method: 'POST',
@@ -155,11 +181,22 @@ export default function People() {
         body: JSON.stringify({ userId, faces: [face] })
       });
       if (!res.ok) throw new Error('Quick tag failed');
+      
       setMessage({ type: 'success', text: 'Face identified successfully.' });
-      const freshData = await fetchData();
-      await maybeOfferProfilePictureFallback(userId, face.itemId, freshData.users);
+      
+      // Trigger silent background AI sync
+      fetch(`${API_BASE}/gallery/refresh`, { method: 'POST' });
+      
+      const freshData = await fetchData(true);
+      maybeOfferProfilePictureFallback(userId, face.itemId, freshData.users);
+      
+      // Auto-close if this was the last face in the cluster
+      if (selectedCluster && selectedCluster.relatedPhotos.length <= 1) {
+        setSelectedCluster(null);
+      }
     } catch (err: any) {
       setMessage({ type: 'error', text: err.message });
+      fetchData(true); // revert silently
     } finally {
       setMerging(false);
     }
@@ -172,20 +209,26 @@ export default function People() {
       return;
     }
     if (!window.confirm(`Mark ${selectedFaces.length} selected face(s) as 'Not a Person'? They will be hidden from discovery.`)) return;
-    
+
     setIgnoring(true);
+    const facesToIgnore = [...selectedFaces];
+    
+    // Optimistic UI update
+    const currentClusterId = selectedCluster.clusterId;
+    setSelectedCluster(null);
+    setClusters(prev => prev.filter(c => c.clusterId !== currentClusterId));
+
     try {
       const res = await fetch(`${API_BASE}/gallery/clusters/ignore`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ faces: selectedFaces })
+        body: JSON.stringify({ faces: facesToIgnore })
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
 
       setMessage({ type: 'success', text: 'Selected faces hidden from discovery.' });
-      setSelectedCluster(null);
-      await fetchData();
+      await fetchData(true);
     } catch (err: any) {
       setMessage({ type: 'error', text: err.message || 'Ignore failed.' });
     } finally {
@@ -200,7 +243,7 @@ export default function People() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
       setMessage({ type: 'success', text: data.message });
-      fetchData();
+      fetchData(true);
     } catch (err: any) {
       setMessage({ type: 'error', text: err.message });
     }
@@ -211,13 +254,13 @@ export default function People() {
     if (list.length === 0) return;
 
     setPreviewNaturalSize(null);
-    setPreview({ 
-      open: true, 
-      itemId: list[0].itemId, 
-      item: null, 
-      boxes: list.map(f => f.box).filter(b => !!b), 
-      loading: true, 
-      error: null 
+    setPreview({
+      open: true,
+      itemId: list[0].itemId,
+      item: null,
+      boxes: list.map(f => f.box).filter(b => !!b),
+      loading: true,
+      error: null
     });
 
     try {
@@ -231,7 +274,7 @@ export default function People() {
   return (
     <div style={{ paddingBottom: '6rem', minHeight: '100vh' }}>
       <div style={{ marginBottom: '3rem' }}>
-        <motion.h2 
+        <motion.h2
           initial={{ opacity: 0, x: -20 }}
           animate={{ opacity: 1, x: 0 }}
           style={{ fontSize: '3.5rem', fontWeight: 900, letterSpacing: '-0.04em', margin: '0 0 0.5rem', color: 'var(--text-main)' }}
@@ -243,7 +286,7 @@ export default function People() {
             <p style={{ color: 'var(--text-muted)', fontSize: '1.1rem', margin: 0, maxWidth: '600px' }}>
               Our AI found these unknown faces. Review them to build your personal face recognition library.
             </p>
-            <button 
+            <button
               onClick={handleResetIgnored}
               style={{ background: 'transparent', border: 'none', color: 'var(--primary)', fontSize: '0.85rem', textDecoration: 'underline', cursor: 'pointer', padding: 0, marginTop: '0.5rem', fontWeight: 700 }}
             >
@@ -269,7 +312,7 @@ export default function People() {
           <div className="loading-spinner" style={{ width: 60, height: 60, borderTopColor: 'var(--primary)' }}></div>
         </div>
       ) : clusters.length === 0 ? (
-        <motion.div 
+        <motion.div
           initial={{ opacity: 0, scale: 0.95 }}
           animate={{ opacity: 1, scale: 1 }}
           style={{ background: 'white', borderRadius: '32px', padding: '80px 20px', textAlign: 'center', border: '1px dashed var(--border-color)', boxShadow: 'var(--shadow)' }}
@@ -279,7 +322,7 @@ export default function People() {
           </div>
           <h3 style={{ fontSize: '1.5rem', fontWeight: 700, margin: '0 0 0.5rem' }}>All Caught Up!</h3>
           <p style={{ color: 'var(--text-muted)', margin: '0 0 1.5rem' }}>Every face in your gallery has been identified or ignored.</p>
-          <button 
+          <button
             onClick={handleResetIgnored}
             className="btn btn-outline"
             style={{ borderRadius: '12px', padding: '8px 20px' }}
@@ -297,9 +340,9 @@ export default function People() {
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: idx * 0.05 }}
                 className="discovery-card"
-                style={{ 
-                  cursor: 'pointer', 
-                  borderRadius: '32px', 
+                style={{
+                  cursor: 'pointer',
+                  borderRadius: '32px',
                   background: 'white',
                   border: '1px solid var(--border-color)',
                   overflow: 'hidden',
@@ -311,19 +354,19 @@ export default function People() {
                 onClick={() => setSelectedCluster(cluster)}
               >
                 <div style={{ height: '300px', position: 'relative', background: '#000' }}>
-                   <img
-                      src={cluster.anchorImage}
-                      alt="Unknown photo"
-                      style={{
-                        width: '100%',
-                        height: '100%',
-                        objectFit: 'cover',
-                        display: 'block',
-                      }}
-                    />
-                    <div style={{ position: 'absolute', bottom: '1.5rem', left: '1.5rem', background: 'rgba(99,102,241,0.95)', padding: '6px 16px', borderRadius: '99px', fontSize: '0.85rem', fontWeight: 900, color: 'white', backdropFilter: 'blur(10px)' }}>
-                      {cluster.faceCount} {cluster.faceCount === 1 ? 'Unknown Face' : 'Unknown Faces'}
-                    </div>
+                  <img
+                    src={cluster.anchorImage}
+                    alt="Unknown photo"
+                    style={{
+                      width: '100%',
+                      height: '100%',
+                      objectFit: 'cover',
+                      display: 'block',
+                    }}
+                  />
+                  <div style={{ position: 'absolute', bottom: '1.5rem', left: '1.5rem', background: 'rgba(99,102,241,0.95)', padding: '6px 16px', borderRadius: '99px', fontSize: '0.85rem', fontWeight: 900, color: 'white', backdropFilter: 'blur(10px)' }}>
+                    {cluster.faceCount} {cluster.faceCount === 1 ? 'Unknown Face' : 'Unknown Faces'}
+                  </div>
                 </div>
                 <div style={{ padding: '1.5rem', textAlign: 'center' }}>
                   <h4 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 800 }}>Unmatched Photo</h4>
@@ -360,73 +403,73 @@ export default function People() {
               <div style={{ display: 'flex', gap: '2rem', alignItems: 'center', background: 'rgba(255,255,255,0.03)', padding: '1.5rem', borderRadius: '24px', border: '1px solid rgba(255,255,255,0.06)', marginBottom: '2.5rem' }}>
                 <FaceCrop src={selectedCluster.anchorImage} box={selectedCluster.anchorBox} size={140} borderRadius={24} paddingFactor={1.3} />
                 <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                   <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-                      <AnimatePresence>
-                        {selectedFaces.length > 0 && (
-                          <motion.button
-                            initial={{ opacity: 0, scale: 0.9 }}
-                            animate={{ opacity: 1, scale: 1 }}
-                            exit={{ opacity: 0, scale: 0.9 }}
-                            onClick={() => {
-                              const firstSelected = selectedFaces[0];
-                              // Find ALL selected faces that belong to the SAME photo as the first selected one
-                              const samePhotoFaces = selectedCluster.relatedPhotos.filter(p => 
-                                selectedFaces.some(sf => sf.itemId === p.itemId && sf.faceIndex === p.faceIndex) &&
-                                p.itemId === firstSelected.itemId
-                              );
-                              if (samePhotoFaces.length > 0) openPreview(samePhotoFaces);
-                            }}
-                            style={{ flex: '1 1 120px', background: 'rgba(99, 102, 241, 0.15)', border: '1px solid rgba(99, 102, 241, 0.3)', color: 'var(--primary)', padding: '12px', borderRadius: '14px', fontWeight: 800, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.6rem' }}
-                          >
-                            <Eye size={18} /> View Selected
-                          </motion.button>
-                        )}
-                      </AnimatePresence>
+                  <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+                    <AnimatePresence>
+                      {selectedFaces.length > 0 && (
+                        <motion.button
+                          initial={{ opacity: 0, scale: 0.9 }}
+                          animate={{ opacity: 1, scale: 1 }}
+                          exit={{ opacity: 0, scale: 0.9 }}
+                          onClick={() => {
+                            const firstSelected = selectedFaces[0];
+                            // Find ALL selected faces that belong to the SAME photo as the first selected one
+                            const samePhotoFaces = selectedCluster.relatedPhotos.filter(p =>
+                              selectedFaces.some(sf => sf.itemId === p.itemId && sf.faceIndex === p.faceIndex) &&
+                              p.itemId === firstSelected.itemId
+                            );
+                            if (samePhotoFaces.length > 0) openPreview(samePhotoFaces);
+                          }}
+                          style={{ flex: '1 1 120px', background: 'rgba(99, 102, 241, 0.15)', border: '1px solid rgba(99, 102, 241, 0.3)', color: 'var(--primary)', padding: '12px', borderRadius: '14px', fontWeight: 800, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.6rem' }}
+                        >
+                          <Eye size={18} /> View Selected
+                        </motion.button>
+                      )}
+                    </AnimatePresence>
 
-                      <button 
-                        onClick={handleIgnore}
-                        disabled={ignoring || merging || selectedFaces.length === 0}
-                        style={{ flex: '1 1 120px', background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.2)', color: '#f87171', padding: '12px', borderRadius: '14px', fontWeight: 800, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.6rem', opacity: selectedFaces.length === 0 ? 0.5 : 1 }}
-                      >
-                        <EyeOff size={18} /> Not a Person
-                      </button>
-                      
-                      <button 
-                        onClick={() => setShowAllFaces(!showAllFaces)}
-                        style={{ flex: '1 1 120px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'white', padding: '12px', borderRadius: '14px', fontWeight: 800, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.6rem' }}
-                      >
-                        {showAllFaces ? <EyeOff size={18} /> : <Eye size={18} />} 
-                        {showAllFaces ? 'Hide photos' : `See all ${selectedCluster.faceCount}`}
-                      </button>
-                   </div>
-                   <p style={{ margin: 0, fontSize: '0.85rem', color: 'rgba(255,255,255,0.3)', fontStyle: 'italic' }}>
-                     {selectedFaces.length > 0 ? `Click 'View Selected' to inspect the ${selectedFaces.length} marked photos.` : "Tip: Select individual photos below to tag or ignore them."}
-                   </p>
+                    <button
+                      onClick={handleIgnore}
+                      disabled={ignoring || merging || selectedFaces.length === 0}
+                      style={{ flex: '1 1 120px', background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.2)', color: '#f87171', padding: '12px', borderRadius: '14px', fontWeight: 800, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.6rem', opacity: selectedFaces.length === 0 ? 0.5 : 1 }}
+                    >
+                      <EyeOff size={18} /> Not a Person
+                    </button>
+
+                    <button
+                      onClick={() => setShowAllFaces(!showAllFaces)}
+                      style={{ flex: '1 1 120px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'white', padding: '12px', borderRadius: '14px', fontWeight: 800, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.6rem' }}
+                    >
+                      {showAllFaces ? <EyeOff size={18} /> : <Eye size={18} />}
+                      {showAllFaces ? 'Hide photos' : `See all ${selectedCluster.faceCount}`}
+                    </button>
+                  </div>
+                  <p style={{ margin: 0, fontSize: '0.85rem', color: 'rgba(255,255,255,0.3)', fontStyle: 'italic' }}>
+                    {selectedFaces.length > 0 ? `Click 'View Selected' to inspect the ${selectedFaces.length} marked photos.` : "Tip: Select individual photos below to tag or ignore them."}
+                  </p>
                 </div>
               </div>
 
               {/* Photo Evidence (Collapsible) */}
               <AnimatePresence>
                 {showAllFaces && (
-                  <motion.div 
+                  <motion.div
                     initial={{ height: 0, opacity: 0 }}
                     animate={{ height: 'auto', opacity: 1 }}
                     exit={{ height: 0, opacity: 0 }}
-                    style={{ overflow: 'hidden', marginBottom: '2.5rem' }}
+                    style={{ overflow: 'visible', marginBottom: '2.5rem' }}
                   >
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
                       <div style={{ color: 'rgba(255,255,255,0.6)', fontWeight: 900, fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Select Photos to Tag/Ignore</div>
                       <div style={{ display: 'flex', gap: '1rem' }}>
-                         <button onClick={() => setSelectedFaces(selectedCluster.relatedPhotos.map(p => ({ itemId: p.itemId, faceIndex: p.faceIndex })))} style={{ background: 'transparent', border: 'none', color: 'var(--primary)', fontWeight: 800, fontSize: '0.75rem', cursor: 'pointer' }}>Select All</button>
-                         <button onClick={() => setSelectedFaces([])} style={{ background: 'transparent', border: 'none', color: 'rgba(255,255,255,0.4)', fontWeight: 800, fontSize: '0.75rem', cursor: 'pointer' }}>Clear</button>
+                        <button onClick={() => setSelectedFaces(selectedCluster.relatedPhotos.map(p => ({ itemId: p.itemId, faceIndex: p.faceIndex })))} style={{ background: 'transparent', border: 'none', color: 'var(--primary)', fontWeight: 800, fontSize: '0.75rem', cursor: 'pointer' }}>Select All</button>
+                        <button onClick={() => setSelectedFaces([])} style={{ background: 'transparent', border: 'none', color: 'rgba(255,255,255,0.4)', fontWeight: 800, fontSize: '0.75rem', cursor: 'pointer' }}>Clear</button>
                       </div>
                     </div>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: '1.25rem' }}>
                       {selectedCluster.relatedPhotos.map(p => {
                         const isSelected = selectedFaces.some(f => f.itemId === p.itemId && f.faceIndex === p.faceIndex);
                         return (
-                          <div 
-                            key={`${p.itemId}-${p.faceIndex}`} 
+                          <div
+                            key={`${p.itemId}-${p.faceIndex}`}
                             draggable
                             onDragStart={(e) => {
                               e.dataTransfer.setData('face', JSON.stringify({ itemId: p.itemId, faceIndex: p.faceIndex }));
@@ -437,64 +480,64 @@ export default function People() {
                               e.currentTarget.style.opacity = isSelected ? '1' : '0.4';
                               e.currentTarget.style.transform = 'scale(1)';
                             }}
-                            style={{ position: 'relative', cursor: 'grab', transition: 'all 0.2s' }} 
+                            style={{ position: 'relative', cursor: 'grab', transition: 'all 0.2s' }}
                             onClick={() => toggleFace({ itemId: p.itemId, faceIndex: p.faceIndex })}
                             onDoubleClick={(e) => { e.stopPropagation(); openPreview(p); }}
                           >
-                             <FaceCrop 
-                               src={p.url} 
-                               box={p.box} 
-                               size={130} 
-                               borderRadius={20} 
-                               paddingFactor={1.3} 
-                               style={{ border: isSelected ? '3px solid var(--primary)' : '2px solid rgba(255,255,255,0.1)', opacity: isSelected ? 1 : 0.4 }} 
-                             />
-                             {isSelected && (
-                               <div style={{ position: 'absolute', top: -5, right: -5, background: 'var(--primary)', width: 26, height: 26, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 900, fontSize: '12px', border: '2px solid #0b1020' }}>
-                                 ✓
-                               </div>
-                             )}
-                             {/* QUICK ASSIGN DROPDOWN */}
-                             <button 
-                               onClick={(e) => {
-                                 e.stopPropagation();
-                                 setActiveMenuFace(activeMenuFace?.itemId === p.itemId && activeMenuFace?.faceIndex === p.faceIndex ? null : { itemId: p.itemId, faceIndex: p.faceIndex });
-                               }}
-                               style={{ position: 'absolute', bottom: -6, left: -6, background: 'var(--primary)', border: '2px solid rgba(255,255,255,0.3)', width: 36, height: 36, borderRadius: '50%', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', zIndex: 10, boxShadow: '0 4px 10px rgba(99,102,241,0.4)', transition: 'all 0.2s', transform: activeMenuFace?.itemId === p.itemId && activeMenuFace?.faceIndex === p.faceIndex ? 'scale(1.1)' : 'scale(1)' }}
-                             >
-                               <UserPlus size={18} />
-                             </button>
+                            <FaceCrop
+                              src={p.url}
+                              box={p.box}
+                              size={130}
+                              borderRadius={20}
+                              paddingFactor={1.3}
+                              style={{ border: isSelected ? '3px solid var(--primary)' : '2px solid rgba(255,255,255,0.1)', opacity: isSelected ? 1 : 0.4 }}
+                            />
+                            {isSelected && (
+                              <div style={{ position: 'absolute', top: -5, right: -5, background: 'var(--primary)', width: 26, height: 26, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 900, fontSize: '12px', border: '2px solid #0b1020' }}>
+                                ✓
+                              </div>
+                            )}
+                            {/* QUICK ASSIGN DROPDOWN */}
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setActiveMenuFace(activeMenuFace?.itemId === p.itemId && activeMenuFace?.faceIndex === p.faceIndex ? null : { itemId: p.itemId, faceIndex: p.faceIndex });
+                              }}
+                              style={{ position: 'absolute', bottom: -6, left: -6, background: 'var(--primary)', border: '2px solid rgba(255,255,255,0.3)', width: 36, height: 36, borderRadius: '50%', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', zIndex: 10, boxShadow: '0 4px 10px rgba(99,102,241,0.4)', transition: 'all 0.2s', transform: activeMenuFace?.itemId === p.itemId && activeMenuFace?.faceIndex === p.faceIndex ? 'scale(1.1)' : 'scale(1)' }}
+                            >
+                              <UserPlus size={18} />
+                            </button>
 
-                             <AnimatePresence>
-                               {activeMenuFace?.itemId === p.itemId && activeMenuFace?.faceIndex === p.faceIndex && (
-                                 <motion.div 
-                                   initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                                   animate={{ opacity: 1, y: 0, scale: 1 }}
-                                   exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                                   style={{ position: 'absolute', top: '100%', left: 0, background: '#12172b', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '16px', padding: '0.6rem', zIndex: 1000, boxShadow: '0 20px 50px rgba(0,0,0,0.6)', width: '200px', pointerEvents: 'auto' }} 
-                                   onClick={e => e.stopPropagation()}
-                                 >
-                                    <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.4)', padding: '4px 10px', textTransform: 'uppercase', fontWeight: 900, letterSpacing: '0.05em' }}>Identify As...</div>
-                                    <div style={{ maxHeight: '200px', overflowY: 'auto', scrollbarWidth: 'none' }}>
-                                      {users.map(u => (
-                                        <button 
-                                          key={u.id}
-                                          onClick={() => {
-                                            handleMergeOne(u.id, p);
-                                            setActiveMenuFace(null);
-                                          }}
-                                          style={{ width: '100%', background: 'transparent', border: 'none', color: 'white', padding: '10px', textAlign: 'left', borderRadius: '10px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '12px', transition: 'background 0.2s' }}
-                                          onMouseEnter={e => e.currentTarget.style.background = 'rgba(99, 102, 241, 0.15)'}
-                                          onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
-                                        >
-                                           <img src={u.profilePicture || `https://ui-avatars.com/api/?name=${u.name}`} style={{ width: '32px', height: '32px', borderRadius: '50%', objectFit: 'cover', border: '1px solid rgba(255,255,255,0.1)' }} />
-                                           <span style={{ fontSize: '0.9rem', fontWeight: 700 }}>{u.name}</span>
-                                        </button>
-                                      ))}
-                                    </div>
-                                 </motion.div>
-                               )}
-                             </AnimatePresence>
+                            <AnimatePresence>
+                              {activeMenuFace?.itemId === p.itemId && activeMenuFace?.faceIndex === p.faceIndex && (
+                                <motion.div
+                                  initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                                  exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                                  style={{ position: 'absolute', bottom: '110%', left: 0, background: '#12172b', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '16px', padding: '0.6rem', zIndex: 1000, boxShadow: '0 20px 50px rgba(0,0,0,0.6)', width: '200px', pointerEvents: 'auto' }}
+                                  onClick={e => e.stopPropagation()}
+                                >
+                                  <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.4)', padding: '4px 10px', textTransform: 'uppercase', fontWeight: 900, letterSpacing: '0.05em' }}>Identify As...</div>
+                                  <div style={{ maxHeight: '200px', overflowY: 'auto', scrollbarWidth: 'none' }}>
+                                    {users.map(u => (
+                                      <button
+                                        key={u.id}
+                                        onClick={() => {
+                                          handleMergeOne(u.id, p);
+                                          setActiveMenuFace(null);
+                                        }}
+                                        style={{ width: '100%', background: 'transparent', border: 'none', color: 'white', padding: '10px', textAlign: 'left', borderRadius: '10px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '12px', transition: 'background 0.2s' }}
+                                        onMouseEnter={e => e.currentTarget.style.background = 'rgba(99, 102, 241, 0.15)'}
+                                        onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                                      >
+                                        <img src={u.profilePicture || `https://ui-avatars.com/api/?name=${u.name}`} style={{ width: '32px', height: '32px', borderRadius: '50%', objectFit: 'cover', border: '1px solid rgba(255,255,255,0.1)' }} />
+                                        <span style={{ fontSize: '0.9rem', fontWeight: 700 }}>{u.name}</span>
+                                      </button>
+                                    ))}
+                                  </div>
+                                </motion.div>
+                              )}
+                            </AnimatePresence>
                           </div>
                         );
                       })}
@@ -504,12 +547,12 @@ export default function People() {
               </AnimatePresence>
 
               {/* Sticky User Selection at Bottom */}
-              <div style={{ 
-                position: 'sticky', 
-                bottom: '-2.5rem', 
-                left: '-2.5rem', 
-                right: '-2.5rem', 
-                background: 'rgba(11, 16, 32, 0.95)', 
+              <div style={{
+                position: 'sticky',
+                bottom: '-2.5rem',
+                left: '-2.5rem',
+                right: '-2.5rem',
+                background: 'rgba(11, 16, 32, 0.95)',
                 backdropFilter: 'blur(20px)',
                 padding: '1.5rem 2.5rem',
                 borderTop: '1px solid rgba(255,255,255,0.1)',
@@ -519,8 +562,8 @@ export default function People() {
                 borderBottomRightRadius: '32px'
               }}>
                 <div style={{ color: 'rgba(255,255,255,0.6)', fontWeight: 900, fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '1.25rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                   <span>{selectedFaces.length > 0 ? `Assign ${selectedFaces.length} Selected` : "Drag a photo onto a user to Tag"}</span>
-                   {selectedFaces.length === 0 && <span style={{ color: 'var(--primary)', textTransform: 'none', fontStyle: 'italic' }}>Tip: Drag & Drop photo here</span>}
+                  <span>{selectedFaces.length > 0 ? `Assign ${selectedFaces.length} Selected` : "Drag a photo onto a user to Tag"}</span>
+                  {selectedFaces.length === 0 && <span style={{ color: 'var(--primary)', textTransform: 'none', fontStyle: 'italic' }}>Tip: Drag & Drop photo here</span>}
                 </div>
                 <div style={{ display: 'flex', gap: '1.25rem', overflowX: 'auto', paddingBottom: '0.5rem', scrollbarWidth: 'none' }}>
                   {users.map(u => (
@@ -546,7 +589,7 @@ export default function People() {
                           // Otherwise, just tag that one face
                           const isPartOfSelection = selectedFaces.some(f => f.itemId === face.itemId && f.faceIndex === face.faceIndex);
                           const facesToTag = isPartOfSelection ? selectedFaces : [face];
-                          
+
                           setMerging(true);
                           try {
                             const res = await fetch(`${API_BASE}/gallery/clusters/merge`, {
@@ -569,18 +612,18 @@ export default function People() {
                       }}
                       onClick={() => handleMerge(u.id)}
                       disabled={merging}
-                      style={{ 
+                      style={{
                         flex: '0 0 140px',
-                        background: 'rgba(255,255,255,0.03)', 
-                        border: '1px solid rgba(255,255,255,0.08)', 
-                        borderRadius: '20px', 
-                        padding: '1rem', 
-                        cursor: merging ? 'not-allowed' : 'pointer', 
-                        color: 'white', 
-                        display: 'flex', 
-                        flexDirection: 'column', 
-                        alignItems: 'center', 
-                        gap: '0.75rem', 
+                        background: 'rgba(255,255,255,0.03)',
+                        border: '1px solid rgba(255,255,255,0.08)',
+                        borderRadius: '20px',
+                        padding: '1rem',
+                        cursor: merging ? 'not-allowed' : 'pointer',
+                        color: 'white',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        gap: '0.75rem',
                         transition: 'all 0.2s',
                         position: 'relative'
                       }}
@@ -616,22 +659,22 @@ export default function People() {
 
               <div style={{ padding: '1.5rem', overflowY: 'auto', display: 'flex', justifyContent: 'center', alignItems: 'center', background: '#000' }}>
                 {preview.loading ? <div className="loading-spinner"></div> : preview.item && (
-                   <div style={{ position: 'relative' }}>
-                      <img src={preview.item.url} style={{ maxWidth: '100%', maxHeight: '70vh', borderRadius: '12px' }} onLoad={(e) => setPreviewNaturalSize({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })} />
-                      {previewNaturalSize && preview.boxes.map((box, i) => (
-                        <div key={i} style={{
-                          position: 'absolute',
-                          left: `${((box.x || box._x) / previewNaturalSize.w) * 100}%`,
-                          top: `${((box.y || box._y) / previewNaturalSize.h) * 100}%`,
-                          width: `${((box.width || box._width) / previewNaturalSize.w) * 100}%`,
-                          height: `${((box.height || box._height) / previewNaturalSize.h) * 100}%`,
-                          border: '4px solid var(--primary)',
-                          borderRadius: '8px',
-                          boxShadow: i === 0 ? '0 0 0 9999px rgba(0,0,0,0.4)' : 'none', // Darken background only for the first box to avoid overlap mess
-                          zIndex: 10
-                        }} />
-                      ))}
-                   </div>
+                  <div style={{ position: 'relative' }}>
+                    <img src={preview.item.url} style={{ maxWidth: '100%', maxHeight: '70vh', borderRadius: '12px' }} onLoad={(e) => setPreviewNaturalSize({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })} />
+                    {previewNaturalSize && preview.boxes.map((box, i) => (
+                      <div key={i} style={{
+                        position: 'absolute',
+                        left: `${((box.x || box._x) / previewNaturalSize.w) * 100}%`,
+                        top: `${((box.y || box._y) / previewNaturalSize.h) * 100}%`,
+                        width: `${((box.width || box._width) / previewNaturalSize.w) * 100}%`,
+                        height: `${((box.height || box._height) / previewNaturalSize.h) * 100}%`,
+                        border: '4px solid var(--primary)',
+                        borderRadius: '8px',
+                        boxShadow: i === 0 ? '0 0 0 9999px rgba(0,0,0,0.4)' : 'none', // Darken background only for the first box to avoid overlap mess
+                        zIndex: 10
+                      }} />
+                    ))}
+                  </div>
                 )}
               </div>
             </motion.div>
@@ -640,7 +683,7 @@ export default function People() {
       </AnimatePresence>
 
       {message && (
-        <motion.div 
+        <motion.div
           initial={{ y: 50, opacity: 0 }} animate={{ y: 0, opacity: 1 }}
           style={{ position: 'fixed', bottom: '2rem', right: '2rem', background: message.type === 'error' ? 'rgba(239, 68, 68, 0.95)' : 'rgba(99, 102, 241, 0.95)', backdropFilter: 'blur(10px)', padding: '1rem 2rem', borderRadius: '20px', color: 'white', fontWeight: 800, zIndex: 9999, boxShadow: '0 20px 40px rgba(0,0,0,0.3)' }}
         >

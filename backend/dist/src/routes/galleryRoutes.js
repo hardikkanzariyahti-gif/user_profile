@@ -23,7 +23,6 @@ router.post('/clusters/reset-ignored', (0, asyncHandler_1.default)(galleryContro
 router.get('/search', (0, asyncHandler_1.default)(galleryController_1.default.searchByHashtag));
 router.post('/:id/hashtags', (0, asyncHandler_1.default)(galleryController_1.default.setHashtags));
 router.get('/:id', (0, asyncHandler_1.default)(galleryController_1.default.getById));
-router.post('/ignore-review/:id', (0, asyncHandler_1.default)(galleryController_1.default.ignoreReview));
 router.delete('/:id', (0, asyncHandler_1.default)(galleryController_1.default.remove));
 exports.default = router;
 //# sourceMappingURL=galleryRoutes.js.map

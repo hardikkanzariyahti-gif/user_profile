@@ -54,10 +54,10 @@ const galleryController = {
         galleryService_1.galleryService.refreshGalleryRecognition(forceRescan).catch(err => {
             console.error('Background Sync Error:', err);
         });
-        res.status(202).json({ message: 'Background sync started', status: galleryService_1.syncState });
+        res.status(202).json({ message: 'Background sync started', status: galleryService_1.galleryService.syncState });
     },
     async syncStatus(req, res) {
-        res.json(galleryService_1.syncState);
+        res.json(galleryService_1.galleryService.syncState);
     },
     async tagFace(req, res) {
         const galleryItemId = Number(req.body.galleryItemId);
@@ -126,15 +126,6 @@ const galleryController = {
         }
         const suggestions = await galleryService_1.galleryService.getTagSuggestions(id);
         res.json(suggestions);
-    },
-    async ignoreReview(req, res) {
-        const id = Number(req.params.id);
-        if (!id || isNaN(id)) {
-            res.status(400).json({ error: 'Valid gallery id is required.' });
-            return;
-        }
-        const result = await galleryService_1.galleryService.ignoreGalleryReview(id);
-        res.json(result);
     },
 };
 exports.default = galleryController;

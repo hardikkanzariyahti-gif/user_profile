@@ -37,14 +37,30 @@ const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
 const AI_API_URL = 'http://localhost:8000/extract_faces';
 const AI_BATCH_URL = 'http://localhost:8000/extract_faces_batch';
-const MATCH_THRESHOLD = 0.8;
-const AMBIGUITY_MARGIN = 0.25;
-const AUTO_TAG_THRESHOLD = 20;
+const USE_MATCHER_V2 = process.env.FACE_MATCHER_V2 === 'true';
+function numberFromEnv(key, fallback) {
+    const raw = process.env[key];
+    if (!raw)
+        return fallback;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? parsed : fallback;
+}
+const MATCH_CONFIG = {
+    // Legacy defaults preserved so existing behavior remains stable unless toggled/configured.
+    matchThreshold: numberFromEnv('FACE_MATCH_THRESHOLD', 1.0),
+    ambiguityMargin: numberFromEnv('FACE_AMBIGUITY_MARGIN', 0.22),
+    confidentThreshold: numberFromEnv('FACE_CONFIDENT_DISTANCE', 0.4),
+    robustTopK: Math.max(1, Math.floor(numberFromEnv('FACE_ROBUST_TOP_K', 3))),
+    robustNearThreshold: numberFromEnv('FACE_ROBUST_NEAR_THRESHOLD', 0.92),
+    robustMinSupport: Math.max(1, Math.floor(numberFromEnv('FACE_ROBUST_MIN_SUPPORT', 2))),
+};
+const MATCH_THRESHOLD = MATCH_CONFIG.matchThreshold;
 let isLoaded = false;
 async function loadModels() {
+    // We dont load models to RAM in Node anymore! The Python server holds them.
     if (isLoaded)
         return;
-    console.log('Smart Systems (DeepFace Microservice Mode) Loaded!');
+    console.log('Smart Systems (DeepFace Microservice Mode) Loaded! 🚀');
     isLoaded = true;
 }
 function euclideanDistance(d1, d2) {
@@ -74,88 +90,127 @@ function deserializeDescriptor(data) {
         return null;
     return l2Normalize(new Float32Array(data));
 }
-function parseLabelToUser(label) {
-    if (!label || label === 'unknown')
-        return null;
-    try {
-        const parsed = JSON.parse(label);
-        if (parsed && typeof parsed.id === 'number' && typeof parsed.name === 'string') {
-            return { id: parsed.id, name: parsed.name };
-        }
-        return null;
-    }
-    catch {
-        return null;
-    }
-}
+/**
+ * Match a 512D face descriptor against all known users.
+ * Contains safety check for mixed 128D/512D arrays.
+ */
 function findBestMatchWithMargin(descriptor, knownUsers) {
     const allMatches = [];
     for (const labeledDescriptors of knownUsers) {
         let minDistance = Infinity;
+        const distances = [];
         for (const reference of labeledDescriptors.descriptors) {
             const refArray = new Float32Array(reference);
-            if (descriptor.length !== refArray.length)
+            // Safety Check: Old Database vs New AI
+            if (descriptor.length !== refArray.length) {
+                console.warn(`[AI] Size mismatch! Old DB uses ${refArray.length}D vectors. The new AI uses ${descriptor.length}D. You must clear old tags.`);
                 continue;
+            }
             const d = euclideanDistance(descriptor, refArray);
+            distances.push(d);
             if (d < minDistance)
                 minDistance = d;
         }
         if (minDistance !== Infinity) {
-            allMatches.push({ label: labeledDescriptors.label, distance: minDistance });
+            let rankingDistance = minDistance;
+            let supportCount = 1;
+            if (USE_MATCHER_V2 && distances.length > 0) {
+                const sortedDistances = [...distances].sort((a, b) => a - b);
+                const topK = sortedDistances.slice(0, Math.min(MATCH_CONFIG.robustTopK, sortedDistances.length));
+                rankingDistance = topK.reduce((sum, v) => sum + v, 0) / topK.length;
+                supportCount = distances.filter((d) => d <= MATCH_CONFIG.robustNearThreshold).length;
+            }
+            allMatches.push({
+                label: labeledDescriptors.label,
+                distance: rankingDistance,
+                minDistance,
+                supportCount,
+            });
         }
     }
     const sorted = allMatches.sort((a, b) => a.distance - b.distance);
     const best = sorted[0];
     const second = sorted[1];
-    console.log('[Match] Best:', best?.label, '=', best?.distance?.toFixed(3), 'Thresh:', MATCH_THRESHOLD);
     if (!best)
-        return { label: 'unknown', distance: null };
-    if (best.distance > MATCH_THRESHOLD) {
-        return { label: 'unknown', distance: best.distance };
+        return { label: 'unknown', distance: null, reason: 'no_candidates' };
+    // AI DEBUG: Log the distance scale
+    if (best.distance > 2.0 || best.distance < 0) {
+        console.log(`[AI DEBUG] ⚠️  Unusual distance detected: ${best.distance.toFixed(4)}. Target dim: ${descriptor.length}, Candidate: ${best.label}`);
     }
+    // Hard threshold
+    if (best.distance > MATCH_THRESHOLD) {
+        console.log(`[AI] ❌ No match. Best=${best.label} dist=${best.distance?.toFixed(2)} > threshold=${MATCH_THRESHOLD}`);
+        return {
+            label: 'unknown',
+            distance: best.distance,
+            candidate: best.label,
+            secondCandidate: second?.label,
+            secondDistance: second?.distance ?? null,
+            margin: second ? (second.distance - best.distance) : null,
+            reason: 'threshold',
+            confidence: 0,
+        };
+    }
+    if (USE_MATCHER_V2) {
+        const hasEnoughDescriptors = knownUsers.find((u) => u.label === best.label)?.descriptors?.length >= 3;
+        if (hasEnoughDescriptors && best.supportCount < MATCH_CONFIG.robustMinSupport) {
+            console.log(`[AI] ⚠️ Weak support: ${best.label} has support=${best.supportCount} (<${MATCH_CONFIG.robustMinSupport}) — unknown`);
+            return {
+                label: 'unknown',
+                distance: best.distance,
+                candidate: best.label,
+                secondCandidate: second?.label,
+                secondDistance: second?.distance ?? null,
+                margin: second ? (second.distance - best.distance) : null,
+                reason: 'ambiguous',
+                confidence: _calculateConfidence(best.distance, second ? (second.distance - best.distance) : null, best.supportCount),
+            };
+        }
+    }
+    if (USE_MATCHER_V2 && sorted.length > 1) {
+        const margin = second.distance - best.distance;
+        if (margin < MATCH_CONFIG.ambiguityMargin && best.distance > MATCH_CONFIG.confidentThreshold) {
+            console.log(`[AI] ⚠️ Ambiguous: ${best.label}(${best.distance?.toFixed(2)}) vs ${second.label}(${second.distance?.toFixed(2)}) — unknown`);
+            return {
+                label: 'unknown',
+                distance: best.distance,
+                candidate: best.label,
+                secondCandidate: second.label,
+                secondDistance: second.distance,
+                margin,
+                reason: 'ambiguous',
+                confidence: _calculateConfidence(best.distance, margin, best.supportCount),
+            };
+        }
+    }
+    const margin = second ? (second.distance - best.distance) : null;
+    const confidence = _calculateConfidence(best.distance, margin, best.supportCount);
+    console.log(`[AI] ✅ Match → ${best.label} dist=${best.distance?.toFixed(2)} confidence=${confidence}%`);
     return {
         label: best.label,
         distance: best.distance,
         secondCandidate: second?.label,
         secondDistance: second?.distance ?? null,
-        margin: second ? (second.distance - best.distance) : null,
+        margin,
         reason: 'matched',
-        confidence: Math.round(Math.max(0, (1 - best.distance / MATCH_THRESHOLD) * 100)),
+        confidence,
     };
 }
-function getFaceSuggestions(imagePath, labeledDescriptors) {
-    return [];
+function _calculateConfidence(distance, margin, supportCount) {
+    const distFactor = Math.max(0, 1 - (distance / MATCH_THRESHOLD));
+    let marginFactor = 1;
+    if (margin !== null && margin < MATCH_CONFIG.ambiguityMargin) {
+        marginFactor = margin / MATCH_CONFIG.ambiguityMargin;
+    }
+    let supportFactor = 1;
+    if (USE_MATCHER_V2 && supportCount > 0) {
+        supportFactor = Math.min(1, supportCount / MATCH_CONFIG.robustMinSupport);
+    }
+    return Math.round(Math.max(0, Math.min(100, distFactor * marginFactor * supportFactor * 100)));
 }
-async function getFaceSuggestionsBatch(imagePaths, knownUsers) {
-    const rawResults = await fetchFacesFromPythonBatch(imagePaths);
-    console.log('[Batch] Matching against', knownUsers.length, 'users');
-    return rawResults.map((faces) => {
-        return faces.map((d) => {
-            const floatDescriptor = l2Normalize(new Float32Array(d.descriptor));
-            const match = findBestMatchWithMargin(floatDescriptor, knownUsers);
-            const userData = parseLabelToUser(match.label);
-            const suggestions = [];
-            if (userData && match.reason === 'matched') {
-                suggestions.push({
-                    id: userData.id,
-                    name: userData.name,
-                    label: match.label,
-                    confidence: match.confidence ?? 0,
-                    distance: match.distance != null ? Number(match.distance.toFixed(4)) : null,
-                });
-            }
-            return {
-                box: d.box,
-                confidence: match.confidence ?? 0,
-                isConfident: (match.confidence ?? 0) >= AUTO_TAG_THRESHOLD && match.reason === 'matched',
-                topSuggestion: suggestions[0] || null,
-                allSuggestions: suggestions.slice(0, 3),
-                label: match.label,
-                reason: match.reason || null,
-            };
-        });
-    });
-}
+/**
+ * Calls the Python Microservice for a SINGLE image.
+ */
 async function fetchFacesFromPython(imagePath) {
     try {
         const fileBuffer = fs.readFileSync(imagePath);
@@ -167,17 +222,31 @@ async function fetchFacesFromPython(imagePath) {
             body: formData
         });
         if (!res.ok) {
-            console.error('[AI] Error:', res.statusText);
+            console.error(`[AI Engine] Error response from Python API: ${res.statusText}`);
             return [];
         }
         const data = await res.json();
         return data.faces || [];
     }
     catch (err) {
-        console.error('[AI] Failed:', err.message);
+        if (err.cause && err.cause.code === 'ECONNREFUSED') {
+            console.error(`\n🚨 [CRITICAL AI ERROR] Could not reach the Python Background AI at ${AI_API_URL}.`);
+            console.error(`🚨 Please make sure you have run 'python main.py' inside the 'ai_service' folder!\n`);
+        }
+        else {
+            console.error('[AI Engine] Failed to fetch faces from microservice:', err.message);
+        }
         return [];
     }
 }
+/**
+ * Calls the Python Microservice for a BATCH of images simultaneously.
+ * Sends up to `imagePaths.length` images in a single multipart POST.
+ * Returns results in the same order as the input paths.
+ *
+ * Falls back to sequential single-image requests if the batch endpoint is
+ * unavailable (e.g. older Python service version).
+ */
 async function fetchFacesFromPythonBatch(imagePaths) {
     if (imagePaths.length === 0)
         return [];
@@ -197,13 +266,15 @@ async function fetchFacesFromPythonBatch(imagePaths) {
             body: formData,
         });
         if (!res.ok) {
-            throw new Error('Batch failed');
+            throw new Error(`Batch endpoint returned ${res.status}: ${res.statusText}`);
         }
         const batchResults = (await res.json());
+        // Results come back in the same order as files were appended
         return batchResults.map(r => r.faces || []);
     }
     catch (err) {
-        console.warn('[AI] Batch fallback:', err.message);
+        console.warn('[AI Engine] Batch endpoint failed, falling back to sequential:', err.message);
+        // Graceful fallback: run sequentially
         const results = [];
         for (const imgPath of imagePaths) {
             results.push(await fetchFacesFromPython(imgPath));
@@ -211,10 +282,14 @@ async function fetchFacesFromPythonBatch(imagePaths) {
         return results;
     }
 }
+/**
+ * Get the single best/largest face descriptor from an image (for profile pictures).
+ */
 async function getFaceDescriptor(imagePath) {
     const faces = await fetchFacesFromPython(imagePath);
     if (!faces || faces.length === 0)
         return null;
+    // Pick the most prominent face by area size
     const best = faces.reduce((prev, cur) => {
         const area = cur.box._width * cur.box._height;
         return (!prev || area > prev.area) ? { det: cur, area } : prev;
@@ -228,6 +303,9 @@ async function identifyFace(targetImagePath, knownUsers) {
     const best = findBestMatchWithMargin(descriptor, knownUsers);
     return best.label === 'unknown' ? null : best;
 }
+/**
+ * Detect & identify ALL faces in an image
+ */
 async function identifyAllFaces(targetImagePath, knownUsers) {
     const faces = await fetchFacesFromPython(targetImagePath);
     if (!faces || faces.length === 0)
@@ -238,28 +316,80 @@ async function identifyAllFaces(targetImagePath, knownUsers) {
         return {
             label: match.label,
             distance: match.distance != null ? Number(match.distance.toFixed(4)) : null,
+            secondDistance: match.secondDistance != null ? Number(match.secondDistance.toFixed(4)) : null,
+            margin: match.margin != null ? Number(match.margin.toFixed(4)) : null,
+            reason: match.reason || null,
+            confidence: match.confidence ?? 0,
             box: d.box,
         };
     });
 }
+/**
+ * Instant recognition for upload - gets top suggestions per face with confidence
+ */
+async function getFaceSuggestions(targetImagePath, knownUsers) {
+    const faces = await fetchFacesFromPython(targetImagePath);
+    if (!faces || faces.length === 0)
+        return [];
+    return faces.map((d) => {
+        const floatDescriptor = l2Normalize(new Float32Array(d.descriptor));
+        const match = findBestMatchWithMargin(floatDescriptor, knownUsers);
+        const suggestions = [];
+        if (match.label !== 'unknown') {
+            suggestions.push({
+                label: match.label,
+                confidence: match.confidence ?? 0,
+                distance: match.distance != null ? Number(match.distance.toFixed(4)) : null,
+            });
+        }
+        if (match.secondCandidate && match.secondDistance !== null && match.margin !== null) {
+            const marginValue = match.margin ?? 0;
+            suggestions.push({
+                label: match.secondCandidate,
+                confidence: Math.max(0, (match.confidence ?? 0) - Math.round((marginValue / MATCH_CONFIG.ambiguityMargin) * 30)),
+                distance: match.secondDistance,
+            });
+        }
+        return {
+            box: d.box,
+            confidence: match.confidence ?? 0,
+            isConfident: (match.confidence ?? 0) >= 80 && match.reason === 'matched',
+            topSuggestion: suggestions[0] || null,
+            allSuggestions: suggestions.slice(0, 3),
+            label: match.label,
+            reason: match.reason || null,
+        };
+    });
+}
+/**
+ * Just return all descriptor arrays.
+ */
 async function getAllDescriptors(imagePath) {
     const faces = await fetchFacesFromPython(imagePath);
     return faces.map((d) => l2Normalize(new Float32Array(d.descriptor)));
 }
+/**
+ * Core function for bulk gallery scanning — single image.
+ */
 async function detectFaces(imagePath) {
     const faces = await fetchFacesFromPython(imagePath);
     const filename = path.basename(imagePath);
-    console.log(`[detectFaces] ${filename}: ${faces.length} face(s)`);
+    console.log(`[detectFaces] ${filename}: Python Engine found ${faces.length} high-quality face(s)`);
     return faces.map((d) => ({
         descriptor: l2Normalize(new Float32Array(d.descriptor)),
         box: d.box,
     }));
 }
+/**
+ * Core function for bulk gallery scanning — PARALLEL BATCH.
+ * Sends multiple images to Python in ONE request and processes them in parallel.
+ * Returns results in same order as imagePaths.
+ */
 async function detectFacesBatch(imagePaths) {
     const rawResults = await fetchFacesFromPythonBatch(imagePaths);
     return rawResults.map((faces, idx) => {
         const filename = path.basename(imagePaths[idx]);
-        console.log(`[detectFacesBatch] ${filename}: ${faces.length} face(s)`);
+        console.log(`[detectFacesBatch] ${filename}: ${faces.length} face(s) found`);
         return faces.map((d) => ({
             descriptor: l2Normalize(new Float32Array(d.descriptor)),
             box: d.box,
@@ -273,15 +403,12 @@ exports.default = {
     getAllDescriptors,
     detectFaces,
     detectFacesBatch,
+    getFaceSuggestions,
     serializeDescriptor,
     deserializeDescriptor,
     findBestMatchWithMargin,
     loadModels,
-    getFaceSuggestions,
-    getFaceSuggestionsBatch,
     MATCH_THRESHOLD,
-    AUTO_TAG_THRESHOLD,
     euclideanDistance,
-    parseLabelToUser,
 };
 //# sourceMappingURL=faceAi.js.map

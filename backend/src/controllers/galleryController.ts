@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { galleryService, syncState } from '../services/galleryService';
+import { galleryService } from '../services/galleryService';
 
 const galleryController = {
   async list(req: Request, res: Response) {
@@ -62,11 +62,11 @@ const galleryController = {
       console.error('Background Sync Error:', err);
     });
 
-    res.status(202).json({ message: 'Background sync started', status: syncState });
+    res.status(202).json({ message: 'Background sync started', status: galleryService.syncState });
   },
 
   async syncStatus(req: Request, res: Response) {
-    res.json(syncState);
+    res.json(galleryService.syncState);
   },
 
   async tagFace(req: Request, res: Response) {
@@ -143,16 +143,6 @@ const galleryController = {
     }
     const suggestions = await galleryService.getTagSuggestions(id);
     res.json(suggestions);
-  },
-
-  async ignoreReview(req: Request, res: Response) {
-    const id = Number(req.params.id);
-    if (!id || isNaN(id)) {
-      res.status(400).json({ error: 'Valid gallery id is required.' });
-      return;
-    }
-    const result = await galleryService.ignoreGalleryReview(id);
-    res.json(result);
   },
 
 };

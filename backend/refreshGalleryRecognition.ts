@@ -7,7 +7,7 @@ import faceAi from './faceAi';
 
 async function refreshRecognition(): Promise<void> {
   await faceAi.loadModels();
-  const result = await galleryService.refreshGalleryRecognition();
+  const result = await galleryService.refreshGalleryRecognition(true);
   console.log('Gallery recognition refresh complete:', result);
 }
 

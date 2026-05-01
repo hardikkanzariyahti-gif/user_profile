@@ -1,10 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Image as ImageIcon, CheckCircle2, AlertCircle, Plus, Camera, X, ChevronLeft, ChevronRight, Album as AlbumIcon, CheckSquare, Square, Share2, Hash, RefreshCw, RotateCcw, ChevronDown, Trash2 } from 'lucide-react';
+import { Image as ImageIcon, CheckCircle2, AlertCircle, Plus, Camera, X, ChevronLeft, ChevronRight, Album as AlbumIcon, CheckSquare, Square, Share2, Hash, RefreshCw, RotateCcw, ChevronDown, Trash2, Eye } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import CameraCapture from '../components/CameraCapture';
-import { fetchGallery, uploadGallery, refreshGallery, getSyncStatus, setGalleryItemHashtags, deleteGalleryItem, untagFaceInPhoto } from '../services/galleryService';
+import SuggestionModal from '../components/SuggestionModal';
+import { fetchGallery, uploadGallery, refreshGallery, getSyncStatus, setGalleryItemHashtags, deleteGalleryItem, untagFaceInPhoto, tagFaceInPhoto, getTagSuggestions } from '../services/galleryService';
 import { createAlbum } from '../services/albumService';
+import { request as apiRequest } from '../services/apiClient';
 
 interface UserProfile {
   id: number;
@@ -46,6 +48,11 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
   const [syncMenuOpen, setSyncMenuOpen] = useState(false);
   const [scanningBanner, setScanningBanner] = useState<{ count: number; progress: number; done: boolean } | null>(null);
   const scanTimerRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // --- Suggestion Modal State ---
+  const [showSuggestionModal, setShowSuggestionModal] = useState(false);
+  const [suggestionData, setSuggestionData] = useState<any>(null);
+  const [allUsers, setAllUsers] = useState<Array<{ id: number; name: string; profilePicture?: string }>>([]);
 
   // --- Album Selection State ---
   const [isSelectionMode, setIsSelectionMode] = useState(false);
@@ -94,7 +101,6 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
   const loadGallery = async (silent = false) => {
     if (!silent) setLoading(true);
     try {
-      // Determine what to fetch based on viewMode and login status
       const userIdToFetch = (viewMode === 'personal' && loggedInUserId) ? loggedInUserId : undefined;
       const data = await fetchGallery(userIdToFetch);
       setImages(data);
@@ -106,6 +112,23 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
       setLoading(false);
     }
   };
+
+  const loadAllUsers = async () => {
+    try {
+      const users = await apiRequest('/api/users');
+      setAllUsers(Array.isArray(users) ? users.map((u: any) => ({
+        id: u.id,
+        name: u.name,
+        profilePicture: u.profile_picture || u.profilePicture,
+      })) : []);
+    } catch (err) {
+      console.warn('Could not load users for suggestions:', err);
+    }
+  };
+
+  useEffect(() => {
+    loadAllUsers();
+  }, []);
 
   const handleRefreshRecognition = async (forceRescan = false) => {
     setRefreshing(true);
@@ -157,16 +180,31 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
     files.forEach((file) => formData.append('gallery', file));
 
     try {
-      await uploadGallery(formData, loggedInUserId || undefined);
-      await loadGallery(true);
+      const result = await uploadGallery(formData, loggedInUserId || undefined);
 
-      // Start scanning banner with real progress polling
+      let galleryData = result;
+      let suggestions = null;
+
+      if (result.gallery && result.suggestions) {
+        galleryData = result.gallery;
+        suggestions = result.suggestions;
+      }
+
+      setImages(Array.isArray(galleryData) ? galleryData : []);
+      await loadAllUsers();
+
+      if (suggestions && suggestions.lowConfidenceCount > 0) {
+        setSuggestionData(suggestions);
+        setShowSuggestionModal(true);
+      } else if (suggestions && suggestions.highConfidenceCount > 0) {
+        setMessage({ type: 'success', text: `${suggestions.highConfidenceCount} face(s) auto-tagged!` });
+        setTimeout(() => setMessage(null), 3000);
+      }
+
       if (scanTimerRef.current) clearInterval(scanTimerRef.current);
       setScanningBanner({ count: files.length, progress: 0, done: false });
 
-      // Poll the real sync status for accurate progress
       const POLL_MS = 800;
-      // Give the backend a moment to kick off the scan
       await new Promise(r => setTimeout(r, 600));
 
       scanTimerRef.current = setInterval(async () => {
@@ -178,17 +216,14 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
             const pct = total > 0 ? Math.min(99, Math.round((current / total) * 100)) : 0;
             setScanningBanner(prev => prev ? { ...prev, progress: pct, done: false } : null);
           } else {
-            // Scan finished
             clearInterval(scanTimerRef.current!);
             scanTimerRef.current = null;
             setScanningBanner(prev => prev ? { ...prev, progress: 100, done: true } : null);
-            
-            // Fetch updated data silently
+
             const userIdToFetch = (viewMode === 'personal' && loggedInUserId) ? loggedInUserId : undefined;
             const updatedData = await fetchGallery(userIdToFetch);
             setImages(updatedData);
 
-            // If a preview is currently open, update its tags too!
             if (selectedImage) {
               const freshImg = updatedData.find((i: any) => i.id === selectedImage.id);
               if (freshImg) setSelectedImage(freshImg);
@@ -248,6 +283,59 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
   const handleCameraCapture = async (file: File) => {
     setShowCamera(false);
     await uploadImages([file]);
+  };
+
+  const handleConfirmTag = async (faceIndex: number, userId: number) => {
+    if (!suggestionData) return;
+
+    await tagFaceInPhoto(suggestionData.itemId, userId, faceIndex);
+
+    setImages(prev => prev.map(img => {
+      const id = typeof img.id === 'string' ? parseInt(img.id.replace('profile-', ''), 10) : img.id;
+      if (id === suggestionData.itemId) {
+        const user = allUsers.find(u => u.id === userId);
+        if (user) {
+          return {
+            ...img,
+            recognizedUsers: [...(img.recognizedUsers || []), user as UserProfile],
+          };
+        }
+      }
+      return img;
+    }));
+
+    const updatedFaces = suggestionData.faces.map((f: any) =>
+      f.faceIndex === faceIndex ? { ...f, isConfident: true } : f
+    );
+    const lowConfRemaining = updatedFaces.filter((f: any) => !f.isConfident).length;
+    setSuggestionData({ ...suggestionData, faces: updatedFaces, lowConfidenceCount: lowConfRemaining });
+  };
+
+  const handleDismissSuggestion = () => {
+    setShowSuggestionModal(false);
+    setSuggestionData(null);
+  };
+
+  const handleSkipSuggestions = () => {
+    setShowSuggestionModal(false);
+    setSuggestionData(null);
+    if (scanTimerRef.current) clearInterval(scanTimerRef.current);
+    setScanningBanner({ count: 1, progress: 0, done: false });
+    const POLL_MS = 800;
+    scanTimerRef.current = setInterval(async () => {
+      try {
+        const status = await getSyncStatus();
+        if (status && status.isScanning) {
+          const pct = status.total > 0 ? Math.min(99, Math.round((status.current / status.total) * 100)) : 0;
+          setScanningBanner(prev => prev ? { ...prev, progress: pct } : null);
+        } else {
+          clearInterval(scanTimerRef.current!);
+          scanTimerRef.current = null;
+          setScanningBanner(prev => prev ? { ...prev, progress: 100, done: true } : null);
+          setTimeout(() => setScanningBanner(null), 3000);
+        }
+      } catch {}
+    }, POLL_MS);
   };
 
   const handleSaveHashtags = async () => {
@@ -319,7 +407,7 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
     const itemId = typeof item.id === 'string'
       ? parseInt(item.id.replace('profile-', ''), 10)
       : item.id;
-    
+
     if (isNaN(itemId as number)) return;
 
     const confirmed = window.confirm(`Remove "${user.name}" from this photo? AI will not re-tag them here.`);
@@ -327,15 +415,15 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
 
     try {
       await untagFaceInPhoto(itemId as number, user.id);
-      
+
       // Update local state
       const updatedRecognizedUsers = (item.recognizedUsers || []).filter(u => u.id !== user.id);
-      
+
       setImages(prev => prev.map(i => {
         const id = typeof i.id === 'string' ? parseInt(i.id.replace('profile-', ''), 10) : i.id;
         return id === itemId ? { ...i, recognizedUsers: updatedRecognizedUsers } : i;
       }));
-      
+
       if (selectedImage && (selectedImage.id === item.id)) {
         setSelectedImage(prev => prev ? { ...prev, recognizedUsers: updatedRecognizedUsers } : prev);
       }
@@ -353,7 +441,7 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
   };
 
   const toggleImageSelection = (id: number) => {
-    setSelectedIds(prev => 
+    setSelectedIds(prev =>
       prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
     );
   };
@@ -464,10 +552,10 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
 
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-10" style={{ display: 'flex', flexWrap: 'wrap', gap: '1.5rem', marginBottom: '3rem' }}>
         <div>
-          <h2 className="card-title" style={{ fontSize: '2.5rem', marginBottom: '0.5rem', fontWeight: 800, letterSpacing: '-0.02em' }}>
+          <h2 className="card-title" style={{ fontSize: '1.8rem', marginBottom: '0.3rem', fontWeight: 800, letterSpacing: '-0.02em' }}>
             {viewMode === 'personal' && loggedInUser ? 'Captured Moments' : 'Global Discovery'}
           </h2>
-          <p className="text-muted" style={{ fontSize: '1.1rem' }}>
+          <p className="text-muted" style={{ fontSize: '0.9rem' }}>
             {viewMode === 'personal' && loggedInUser
               ? `Smart gallery showing photos matched to ${loggedInUser.name}.`
               : 'Explore all community photos and identified profiles. To label unknown faces, use the People page.'}
@@ -656,8 +744,8 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
         >
           <div className="loading-spinner" style={{ width: '40px', height: '40px', borderTopColor: 'var(--primary)', borderWidth: '3px' }}></div>
           <div>
-            <h4 style={{ margin: 0, fontSize: '1.25rem' }}>Smart Processing in Progress</h4>
-            <p className="text-muted">Scanning for faces and organizing your gallery...</p>
+            <h4 style={{ margin: 0, fontSize: '1.25rem' }}>Uploading...</h4>
+            <p className="text-muted">Saving your photo to the gallery...</p>
           </div>
         </motion.div>
       )}
@@ -685,8 +773,8 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
       ) : (
         <div className="gallery-grid" style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
-          gap: '2rem',
+          gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
+          gap: '1rem',
         }}>
           <AnimatePresence>
             {images.map((img, index) => (
@@ -697,8 +785,8 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
                 transition={{ duration: 0.3, delay: index * 0.05 }}
                 className={`gallery-card ${selectedIds.includes(Number(img.id)) ? 'selected' : ''}`}
                 onClick={() => toggleImageSelection(Number(img.id))}
-                style={{ 
-                  position: 'relative', 
+                style={{
+                  position: 'relative',
                   cursor: 'pointer',
                   border: selectedIds.includes(Number(img.id)) ? '4px solid var(--primary)' : 'none',
                   transform: selectedIds.includes(Number(img.id)) ? 'scale(0.98)' : 'none',
@@ -714,9 +802,9 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
                   style={{ width: '100%', height: '100%', objectFit: 'cover', aspectRatio: '4/5' }}
                   loading="lazy"
                 />
-                
+
                 {/* Visual Checkbox (Round Button) - Always visible for easy selection */}
-                <div 
+                <div
                   onClick={(e) => { e.stopPropagation(); toggleImageSelection(Number(img.id)); }}
                   style={{
                     position: 'absolute',
@@ -751,7 +839,7 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
                   gap: '0.4rem',
                   zIndex: 10
                 }}>
-                  {img.recognizedUsers && img.recognizedUsers.length > 0 && 
+                  {img.recognizedUsers && img.recognizedUsers.length > 0 &&
                     img.recognizedUsers.map((user: any) => (
                       <div
                         key={user.id}
@@ -770,16 +858,16 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
                           boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)'
                         }}
                       >
-                        <div style={{ 
-                          width: '18px', 
-                          height: '18px', 
-                          borderRadius: '50%', 
+                        <div style={{
+                          width: '18px',
+                          height: '18px',
+                          borderRadius: '50%',
                           overflow: 'hidden',
                           border: '1px solid rgba(255,255,255,0.3)'
                         }}>
-                          <img 
-                            src={user.profilePicture} 
-                            alt={user.name} 
+                          <img
+                            src={user.profilePicture}
+                            alt={user.name}
                             style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                           />
                         </div>
@@ -817,7 +905,7 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
                 </div>
 
                 {/* Hover Reveal Overlay */}
-                <motion.div 
+                <motion.div
                   initial={{ opacity: 0 }}
                   whileHover={{ opacity: 1 }}
                   transition={{ duration: 0.2 }}
@@ -839,14 +927,28 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
                     <span style={{ color: 'white', fontSize: '0.75rem', fontWeight: 600, opacity: 0.9 }}>
                       {new Date((img as any).uploadedAt || 0).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
                     </span>
-                    <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+                    <div style={{ width: '100%', display: 'flex', justifyContent: 'center' }}>
                       <button
                         onClick={(e) => { e.stopPropagation(); handleOpenPreview(img, index); }}
-                        className="btn"
-                        style={{ padding: '4px 10px', fontSize: '0.65rem', background: 'rgba(255,255,255,0.15)', backdropFilter: 'blur(4px)' }}
+                        style={{
+                          padding: '6px 16px',
+                          borderRadius: '20px',
+                          background: 'white',
+                          color: 'black',
+                          border: 'none',
+                          fontSize: '0.8rem',
+                          fontWeight: 800,
+                          cursor: 'pointer',
+                          boxShadow: '0 8px 16px rgba(0,0,0,0.3)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px'
+                        }}
                       >
-                         Preview
+                        <Eye size={14} />
+                        Preview
                       </button>
+                    </div>
                       {loggedInUser && !img.isProfile && (
                         <button
                           onClick={(e) => handleOpenHashtags(img, index, e)}
@@ -872,9 +974,8 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
                         </button>
                       )}
                     </div>
-                  </div>
+                  </motion.div>
                 </motion.div>
-              </motion.div>
             ))}
           </AnimatePresence>
         </div>
@@ -1199,9 +1300,9 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
             <div style={{ color: 'white', fontWeight: 700 }}>
               {selectedIds.length} photo{selectedIds.length > 1 ? 's' : ''} selected
             </div>
-            <button 
+            <button
               onClick={() => setShowAlbumModal(true)}
-              className="btn btn-primary" 
+              className="btn btn-primary"
               style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
             >
               <AlbumIcon size={18} /> Create Album
@@ -1235,7 +1336,7 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
             >
               <h2 style={{ color: 'white', marginBottom: '1.5rem', fontSize: '1.5rem', fontWeight: 800 }}>New Album</h2>
               <p style={{ color: 'rgba(255,255,255,0.6)', marginBottom: '1.5rem' }}>Give your collection of {selectedIds.length} photos a memorable name.</p>
-              
+
               <input
                 type="text"
                 placeholder="Ex: Summer Vacation 2024"
@@ -1251,13 +1352,13 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
 
               <div style={{ display: 'flex', gap: '1rem' }}>
                 <button onClick={() => setShowAlbumModal(false)} style={{ flex: 1, padding: '1rem', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.1)', background: 'transparent', color: 'white', fontWeight: 600, cursor: 'pointer' }}>Cancel</button>
-                <button 
+                <button
                   onClick={handleCreateAlbum}
                   disabled={!newAlbumTitle.trim() || creatingAlbum}
-                  style={{ 
-                    flex: 1, padding: '1rem', borderRadius: '12px', border: 'none', 
-                    background: 'var(--primary)', color: 'white', fontWeight: 700, 
-                    cursor: newAlbumTitle.trim() ? 'pointer' : 'not-allowed', opacity: newAlbumTitle.trim() ? 1 : 0.5 
+                  style={{
+                    flex: 1, padding: '1rem', borderRadius: '12px', border: 'none',
+                    background: 'var(--primary)', color: 'white', fontWeight: 700,
+                    cursor: newAlbumTitle.trim() ? 'pointer' : 'not-allowed', opacity: newAlbumTitle.trim() ? 1 : 0.5
                   }}
                 >
                   {creatingAlbum ? 'Creating...' : 'Create Album'}
@@ -1265,6 +1366,19 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
               </div>
             </motion.div>
           </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Face Tag Suggestion Modal */}
+      <AnimatePresence>
+        {showSuggestionModal && suggestionData && (
+          <SuggestionModal
+            suggestion={suggestionData}
+            allUsers={allUsers}
+            onConfirmTag={handleConfirmTag}
+            onDismiss={handleDismissSuggestion}
+            onSkip={handleSkipSuggestions}
+          />
         )}
       </AnimatePresence>
     </div>

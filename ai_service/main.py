@@ -57,55 +57,121 @@ def _extract_faces_sync(img_bytes: bytes) -> dict:
         return {"error": "Invalid image file format.", "faces": []}
 
     last_error = None
+    original_h, original_w = img.shape[:2]
+    image_area = float(original_h * original_w)
 
-    # --- OPTIMIZATION: Internal Resizing (Fast Scan) ---
-    # Downscaling large images before scanning reduces CPU math workload significantly.
-    max_dim = 800
-    h, w = img.shape[:2]
-    if h > max_dim or w > max_dim:
-        scale = max_dim / max(h, w)
-        img = cv2.resize(img, (int(w * scale), int(h * scale)))
+    # Guard rails against tiny false positives (e.g. leaves/background patterns).
+    min_face_px = max(15, int(float(os.getenv("FACE_MIN_BOX_PX", "18"))))
+    min_face_area_ratio = float(os.getenv("FACE_MIN_AREA_RATIO", "0.0005"))
+    min_face_area_px = float(os.getenv("FACE_MIN_AREA_PX", "600"))
 
-    for backend in ("mtcnn", "opencv"):
+    def _passes_face_quality(face_area: dict) -> bool:
+        w = int(face_area.get("w", 0))
+        h = int(face_area.get("h", 0))
+        if w < min_face_px or h < min_face_px:
+            return False
+        area = float(w * h)
+        if area < min_face_area_px:
+            return False
+        if image_area > 0:
+            ratio = area / image_area
+            if ratio < min_face_area_ratio:
+                return False
+            # Prevent hallucinated faces that take up the entire image
+            if ratio > 0.80:
+                return False
+            # Reject faces with very abnormal aspect ratios (not a real face)
+            aspect = max(w, h) / max(1, min(w, h))
+            if aspect > 3.0:
+                return False
+        return True
+
+    def run_scan(source_img: np.ndarray, max_dim: int):
+        nonlocal last_error
+        local_img = source_img
+        h, w = local_img.shape[:2]
+        scale = 1.0
+        if h > max_dim or w > max_dim:
+            scale = max_dim / max(h, w)
+            local_img = cv2.resize(local_img, (int(w * scale), int(h * scale)))
+
         try:
             results = DeepFace.represent(
-                img_path=img,
+                img_path=local_img,
                 model_name='Facenet512',
-                detector_backend=backend,
+                detector_backend='mtcnn',
                 enforce_detection=True
             )
 
             if isinstance(results, dict):
                 results = [results]
 
-            # inclusive threshold for MTCNN, stricter for OpenCV fallback
-            DETECTION_THRESHOLD = 0.85 if backend == "mtcnn" else 0.95
+            # MTCNN confidence threshold — 0.85 is reliable for real faces
+            detection_threshold = 0.85
             faces = []
             for face in results:
                 conf = face.get('face_confidence', 0.99)
-                if conf < DETECTION_THRESHOLD:
+                if conf < detection_threshold:
                     continue
-                    
+
                 area = face['facial_area']
-                faces.append({
-                    "box": {
+                if not _passes_face_quality(area):
+                    continue
+
+                # Scale bounding box coordinates back to original image size
+                if scale != 1.0:
+                    box = {
+                        "_x": int(area['x'] / scale),
+                        "_y": int(area['y'] / scale),
+                        "_width": int(area['w'] / scale),
+                        "_height": int(area['h'] / scale)
+                    }
+                else:
+                    box = {
                         "_x": area['x'],
                         "_y": area['y'],
                         "_width": area['w'],
                         "_height": area['h']
-                    },
+                    }
+
+                faces.append({
+                    "box": box,
                     "confidence": conf,
                     "descriptor": face['embedding']
                 })
 
-            if faces:
-                return {"faces": faces, "backend": backend}
+            return {"faces": faces, "backend": "mtcnn"}
         except ValueError as e:
             last_error = e
-            continue
+            return {"faces": []}
         except Exception as e:
             last_error = e
-            continue
+            return {"faces": []}
+
+    # ── Multi-pass scanning strategy ──────────────────────────────────────────
+    # Pass 1: Standard scan at 1200px (good for most photos including groups)
+    first_pass = run_scan(img, max_dim=1200)
+    first_count = len(first_pass.get("faces", []))
+
+    # Pass 2: For large/high-res images, try at higher resolution if we found 
+    # fewer faces than expected (group photos with small faces)
+    if max(original_h, original_w) > 1600:
+        # If we found very few faces in a large image, the faces might be too small
+        second_pass = run_scan(img, max_dim=1800)
+        second_count = len(second_pass.get("faces", []))
+        if second_count > first_count:
+            first_pass = second_pass
+            first_count = second_count
+
+    # Pass 3: For very large images where we STILL have few faces, try full resolution
+    if first_count <= 2 and max(original_h, original_w) > 2000:
+        full_pass = run_scan(img, max_dim=2400)
+        full_count = len(full_pass.get("faces", []))
+        if full_count > first_count:
+            first_pass = full_pass
+
+    if first_pass.get("faces"):
+        return first_pass
 
     if last_error:
         print("Face extraction fallback exhausted:", last_error)
