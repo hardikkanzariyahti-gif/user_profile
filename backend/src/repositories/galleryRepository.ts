@@ -53,6 +53,12 @@ const galleryRepository = {
       where: { id },
     });
   },
+
+  getAllUniqueHashtags() {
+    return prisma.galleryItem.findMany({
+      select: { hashtags: true },
+    });
+  },
 };
 
 export default galleryRepository;

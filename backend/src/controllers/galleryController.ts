@@ -145,7 +145,23 @@ const galleryController = {
     res.json(suggestions);
   },
 
+  async getAllHashtags(req: Request, res: Response) {
+    const hashtags = await galleryService.getAllHashtags();
+    res.json(hashtags);
+  },
+
+  async forceScan(req: Request, res: Response) {
+    const id = Number(req.params.id);
+    if (!id || isNaN(id)) {
+      res.status(400).json({ error: 'Valid gallery id is required.' });
+      return;
+    }
+    const result = await galleryService.forceScanItem(id);
+    res.json(result);
+  },
+
 };
+
 
 
 

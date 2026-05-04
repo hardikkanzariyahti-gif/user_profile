@@ -77,8 +77,8 @@ def _extract_faces_sync(img_bytes: bytes) -> dict:
             ratio = area / image_area
             if ratio < min_face_area_ratio:
                 return False
-            # Prevent hallucinated faces that take up the entire image
-            if ratio > 0.80:
+            # Prevent hallucinated faces that take up the entire image (allow up to 98% for close-ups)
+            if ratio > 0.98:
                 return False
             # Reject faces with very abnormal aspect ratios (not a real face)
             aspect = max(w, h) / max(1, min(w, h))
@@ -99,15 +99,15 @@ def _extract_faces_sync(img_bytes: bytes) -> dict:
             results = DeepFace.represent(
                 img_path=local_img,
                 model_name='Facenet512',
-                detector_backend='mtcnn',
+                detector_backend='retinaface',
                 enforce_detection=True
             )
 
             if isinstance(results, dict):
                 results = [results]
 
-            # MTCNN confidence threshold — 0.85 is reliable for real faces
-            detection_threshold = 0.85
+            # RetinaFace confidence threshold — 0.50 catches almost everything without false positives
+            detection_threshold = 0.50
             faces = []
             for face in results:
                 conf = face.get('face_confidence', 0.99)

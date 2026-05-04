@@ -74,3 +74,13 @@ export function setProfilePictureFromGalleryItem(galleryItemId: number, userId: 
 export function getTagSuggestions(galleryItemId: number): Promise<any> {
   return request(`/api/gallery/suggest/${encodeURIComponent(String(galleryItemId))}`);
 }
+
+export function fetchAllHashtags(): Promise<string[]> {
+  return request(`/api/gallery/hashtags`);
+}
+
+export function forceScanItem(galleryItemId: number): Promise<any> {
+  return request(`/api/gallery/${encodeURIComponent(String(galleryItemId))}/force-scan`, {
+    method: 'POST',
+  });
+}

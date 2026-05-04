@@ -19,9 +19,9 @@ router.post('/clusters/ignore', asyncHandler(galleryController.ignoreCluster));
 router.post('/clusters/reset-ignored', asyncHandler(galleryController.resetIgnored));
 router.get('/search', asyncHandler(galleryController.searchByHashtag));
 router.post('/:id/hashtags', asyncHandler(galleryController.setHashtags));
+router.get('/hashtags', asyncHandler(galleryController.getAllHashtags));
 router.get('/:id', asyncHandler(galleryController.getById));
+router.post('/:id/force-scan', asyncHandler(galleryController.forceScan));
 router.delete('/:id', asyncHandler(galleryController.remove));
 
-
 export default router;
-

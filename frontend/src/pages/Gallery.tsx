@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import CameraCapture from '../components/CameraCapture';
 import SuggestionModal from '../components/SuggestionModal';
-import { fetchGallery, uploadGallery, refreshGallery, getSyncStatus, setGalleryItemHashtags, deleteGalleryItem, untagFaceInPhoto, tagFaceInPhoto, getTagSuggestions } from '../services/galleryService';
+import { fetchGallery, uploadGallery, refreshGallery, getSyncStatus, setGalleryItemHashtags, deleteGalleryItem, untagFaceInPhoto, tagFaceInPhoto, getTagSuggestions, forceScanItem } from '../services/galleryService';
 import { createAlbum } from '../services/albumService';
 import { request as apiRequest } from '../services/apiClient';
 

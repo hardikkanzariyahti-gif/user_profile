@@ -626,6 +626,46 @@ const galleryService = {
     return gallery;
   },
 
+  async forceScanItem(galleryItemId: number) {
+    const item = await galleryRepository.findById(galleryItemId);
+    if (!item) throw httpError(404, 'Gallery item not found');
+    if (!item.url) throw httpError(400, 'Gallery item has no image URL');
+
+    const labeledDescriptors = await getCachedModel();
+
+    // In a single-item scan, we bypass the cache and hit the detector directly
+    const filePath = path.join(UPLOADS_DIR, item.url.split('/').pop() || '');
+    if (!fs.existsSync(filePath)) throw httpError(404, 'Image file not found on disk');
+
+    const results = await faceAi.detectFacesBatch([filePath]);
+    const detections = results[0] || [];
+
+    const faceDescs = Array.isArray(item.faceDescriptors) ? item.faceDescriptors as any[] : [];
+    
+    // We clear previous AI guesses but KEEP your manual tags
+    let baseIds = faceDescs
+      .map((fd: any) => fd.manuallyTaggedUserId)
+      .filter((id: any) => id != null)
+      .map((id: any) => Number(id))
+      .filter((id: number) => !isNaN(id));
+
+    if (labeledDescriptors.length === 0) {
+       await galleryRepository.updateById(item.id, { recognizedUserIds: baseIds });
+       return { message: 'Image scanned, no users in AI model yet.' };
+    }
+
+    const { aiIds, descriptors } = await this.identifyFacesInDetections(detections, labeledDescriptors, faceDescs, baseIds);
+    
+    const merged = [...new Set([...baseIds, ...aiIds])].sort((a, b) => a - b);
+    await galleryRepository.updateById(item.id, { 
+      recognizedUserIds: merged,
+      faceDescriptors: descriptors 
+    });
+
+    invalidateModelCache();
+    return { message: 'Image successfully force-scanned.', recognizedCount: aiIds.length };
+  },
+
   // ── Tag a face manually ────────────────────────────────────────────────────
   /**
    * Manually tag a user in a gallery photo.
@@ -792,7 +832,7 @@ const galleryService = {
           : []).sort((a: number, b: number) => a - b);
 
         const faceDescs = Array.isArray(item.faceDescriptors) ? item.faceDescriptors as any[] : [];
-        
+
         // During a Force Rescan, we must clear previous AI guesses but KEEP your manual tags.
         let baseIds = existingIds;
         if (forceRescan) {
@@ -804,8 +844,8 @@ const galleryService = {
         }
 
         if (labeledDescriptors.length === 0) {
-           if (forceRescan) await galleryRepository.updateById(item.id, { recognizedUserIds: baseIds });
-           return;
+          if (forceRescan) await galleryRepository.updateById(item.id, { recognizedUserIds: baseIds });
+          return;
         }
 
         // 1. Determine re-matching results while respecting rejections
@@ -817,7 +857,7 @@ const galleryService = {
 
           const match = faceAi.findBestMatchWithMargin(det.descriptor, labeledDescriptors);
           let recognizedId = null;
-          
+
           if (match.label !== 'unknown') {
             const id = parseUserId(match.label);
             if (id !== null && !rejectedIds.includes(id)) {
@@ -843,9 +883,9 @@ const galleryService = {
           updatedCount++;
         }
 
-        await galleryRepository.updateById(item.id, { 
+        await galleryRepository.updateById(item.id, {
           recognizedUserIds: merged,
-          faceDescriptors: newFaceDescriptors 
+          faceDescriptors: newFaceDescriptors
         });
       }));
 
@@ -1097,6 +1137,24 @@ const galleryService = {
       invalidateModelCache();
     }
     return { message: `Restored ${resetCount} faces to discovery.`, resetCount };
+  },
+
+  async getAllHashtags() {
+    const items = await galleryRepository.getAllUniqueHashtags();
+    const tagCounts: Record<string, number> = {};
+
+    items.forEach((item: any) => {
+      if (Array.isArray(item.hashtags)) {
+        item.hashtags.forEach((tag: string) => {
+          tagCounts[tag] = (tagCounts[tag] || 0) + 1;
+        });
+      }
+    });
+
+    // Sort by frequency (descending), then alphabetically for ties
+    return Object.entries(tagCounts)
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([tag]) => tag);
   },
 
 };

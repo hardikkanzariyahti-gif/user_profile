@@ -144,13 +144,13 @@ export default function People() {
       if (!res.ok) throw new Error(data.error);
 
       setMessage({ type: 'success', text: `Success! Tagged ${facesToTag.length} photos. AI is syncing the rest...` });
-      
+
       // Trigger silent background AI sync without blocking
       fetch(`${API_BASE}/gallery/refresh`, { method: 'POST' });
 
       // Refresh data silently to show changes without blocking UI
       const freshData = await fetchData(true);
-      
+
       // Don't await the confirm dialog to avoid blocking
       maybeOfferProfilePictureFallback(userId, firstItemId, freshData.users);
     } catch (err: any) {
@@ -162,12 +162,12 @@ export default function People() {
 
   const handleMergeOne = async (userId: number, face: { itemId: number; faceIndex: number }) => {
     setMerging(true);
-    
+
     // Auto-remove the photo from the current cluster INSTANTLY
     setClusters(prev => {
       const newClusters = prev.map(c => {
         if (c.clusterId === selectedCluster?.clusterId) {
-           return {...c, relatedPhotos: c.relatedPhotos.filter(p => !(p.itemId === face.itemId && p.faceIndex === face.faceIndex))}
+          return { ...c, relatedPhotos: c.relatedPhotos.filter(p => !(p.itemId === face.itemId && p.faceIndex === face.faceIndex)) }
         }
         return c;
       });
@@ -181,15 +181,15 @@ export default function People() {
         body: JSON.stringify({ userId, faces: [face] })
       });
       if (!res.ok) throw new Error('Quick tag failed');
-      
+
       setMessage({ type: 'success', text: 'Face identified successfully.' });
-      
+
       // Trigger silent background AI sync
       fetch(`${API_BASE}/gallery/refresh`, { method: 'POST' });
-      
+
       const freshData = await fetchData(true);
       maybeOfferProfilePictureFallback(userId, face.itemId, freshData.users);
-      
+
       // Auto-close if this was the last face in the cluster
       if (selectedCluster && selectedCluster.relatedPhotos.length <= 1) {
         setSelectedCluster(null);
@@ -212,7 +212,7 @@ export default function People() {
 
     setIgnoring(true);
     const facesToIgnore = [...selectedFaces];
-    
+
     // Optimistic UI update
     const currentClusterId = selectedCluster.clusterId;
     setSelectedCluster(null);
