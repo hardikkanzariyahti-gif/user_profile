@@ -3,7 +3,8 @@ import { galleryService } from '../services/galleryService';
 
 const galleryController = {
   async list(req: Request, res: Response) {
-    const gallery = await galleryService.listGallery(req.query.userId);
+    const search = String(req.query.search || '');
+    const gallery = await galleryService.listGallery(req.query.userId, search);
     res.json(gallery);
   },
 

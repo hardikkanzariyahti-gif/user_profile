@@ -8,7 +8,9 @@ const router = Router();
 router.post('/', asyncHandler(userController.create));
 router.get('/', asyncHandler(userController.list));
 router.get('/:id', asyncHandler(userController.getById));
-router.put('/:id', upload.single('profilePicture'), asyncHandler(userController.update));
+router.put('/:id', upload.array('profile_pictures', 5), asyncHandler(userController.update));
 router.delete('/:id', asyncHandler(userController.remove));
+router.post('/verify-quality', upload.single('image'), asyncHandler(userController.verifyQuality));
+router.post('/check-frame', upload.single('image'), asyncHandler(userController.checkFrame));
 
 export default router;

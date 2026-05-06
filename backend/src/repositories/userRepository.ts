@@ -11,6 +11,7 @@ interface UserUpdateData {
   email?: string;
   password?: string;
   profile_picture?: string;
+  profile_pictures?: string[];
   profileDescriptor?: any;
 }
 
@@ -70,6 +71,7 @@ const userRepository = {
         name: true,
         email: true,
         profile_picture: true,
+        profile_pictures: true,
         profileDescriptor: true,
       },
     });
@@ -84,6 +86,7 @@ const userRepository = {
         name: true,
         email: true,
         profile_picture: true,
+        profile_pictures: true,
         profileDescriptor: true,
       },
       orderBy: { id: 'asc' },

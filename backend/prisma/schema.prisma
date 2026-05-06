@@ -17,6 +17,7 @@ model User {
   email             String        @unique
   password          String
   profile_picture   String?       @map("profile picture")
+  profile_pictures  String[]      @default([]) @map("profile_pictures")
   profileDescriptor Json?         @map("profile_descriptor")
   galleryItems      GalleryItem[]
   albums            Album[]
@@ -25,21 +26,34 @@ model User {
 }
 
 model GalleryItem {
-  id                Int      @id @default(autoincrement())
-  url               String
-  uploadedAt        DateTime @default(now())
-  label             String?
-  isProfile         Boolean  @default(false)
+  id                Int            @id @default(autoincrement())
+  url               String         @unique
+  uploadedAt        DateTime       @default(now())
   userId            Int?
-  recognizedUserIds Int[]    @default([])
-  hashtags          String[] @default([])
-  faceDescriptors   Json?    @map("face_descriptors")
+  user              User?          @relation(fields: [userId], references: [id])
+  isProfile         Boolean        @default(false)
+  recognizedUserIds Int[]          @default([])
+  faceDescriptors   Json?
+  hashtags          Hashtag[]      @relation("GalleryItemHashtags")
+  metadata          ImageMetadata?
+  albums            Album[]        @relation("AlbumToGalleryItem")
+}
 
-  user User? @relation(fields: [userId], references: [id])
+model Hashtag {
+  id    Int           @id @default(autoincrement())
+  name  String        @unique
+  items GalleryItem[] @relation("GalleryItemHashtags")
+}
 
-  albums Album[] @relation("AlbumItems")
-
-  @@map("gallery")
+model ImageMetadata {
+  id            Int         @id @default(autoincrement())
+  galleryItemId Int         @unique
+  galleryItem   GalleryItem @relation(fields: [galleryItemId], references: [id], onDelete: Cascade)
+  personCount   Int         @default(0)
+  dominantColor String?
+  aspectRatio   Float?
+  orientation   String?
+  rawJson       Json?       @default("{}")
 }
 
 model Album {
@@ -51,8 +65,7 @@ model Album {
   createdAt   DateTime      @default(now())
   userId      Int
   user        User          @relation(fields: [userId], references: [id])
-  items       GalleryItem[] @relation("AlbumItems")
+  items       GalleryItem[] @relation("AlbumToGalleryItem")
 
   @@map("albums")
 }
-

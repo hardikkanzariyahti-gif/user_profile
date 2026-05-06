@@ -4,7 +4,7 @@ import * as path from 'path';
 const AI_API_URL = 'http://localhost:8000/extract_faces';
 const AI_BATCH_URL = 'http://localhost:8000/extract_faces_batch';
 
-const USE_MATCHER_V2 = process.env.FACE_MATCHER_V2 === 'true';
+const USE_MATCHER_V2 = true; // Enabled by default for multi-embedding support
 
 function numberFromEnv(key: string, fallback: number): number {
   const raw = process.env[key];
@@ -15,8 +15,8 @@ function numberFromEnv(key: string, fallback: number): number {
 
 const MATCH_CONFIG = {
   // Legacy defaults preserved so existing behavior remains stable unless toggled/configured.
-  matchThreshold: numberFromEnv('FACE_MATCH_THRESHOLD', 0.84),
-  ambiguityMargin: numberFromEnv('FACE_AMBIGUITY_MARGIN', 0.22),
+  matchThreshold: numberFromEnv('FACE_MATCH_THRESHOLD', 0.75), // Optimized for distant group photo recognition
+  ambiguityMargin: numberFromEnv('FACE_AMBIGUITY_MARGIN', 0.15),
   confidentThreshold: numberFromEnv('FACE_CONFIDENT_DISTANCE', 0.4),
   robustTopK: Math.max(1, Math.floor(numberFromEnv('FACE_ROBUST_TOP_K', 3))),
   robustNearThreshold: numberFromEnv('FACE_ROBUST_NEAR_THRESHOLD', 0.92),
@@ -30,7 +30,7 @@ let isLoaded = false;
 async function loadModels(): Promise<void> {
   // We dont load models to RAM in Node anymore! The Python server holds them.
   if (isLoaded) return;
-  console.log('Smart Systems (DeepFace Microservice Mode) Loaded! 🚀');
+  console.log('Smart Systems (InsightFace Microservice Mode) Loaded! 🚀');
   isLoaded = true;
 }
 
@@ -181,7 +181,11 @@ function findBestMatchWithMargin(descriptor: Float32Array, knownUsers: any[]): M
   const margin = second ? (second.distance - best.distance) : null;
   const confidence = _calculateConfidence(best.distance, margin, best.supportCount);
 
-  console.log(`[AI] ✅ Match → ${best.label} dist=${best.distance?.toFixed(2)} confidence=${confidence}%`);
+  if (best.distance < MATCH_THRESHOLD) {
+    console.log(`[AI] ✅ Match → ${best.label} dist=${best.distance?.toFixed(2)} confidence=${confidence}%`);
+  } else {
+    console.log(`[AI] ❓ Unknown → best candidate was ${best.label} but dist=${best.distance?.toFixed(2)} > ${MATCH_THRESHOLD}`);
+  }
   return {
     label: best.label,
     distance: best.distance,
@@ -194,25 +198,32 @@ function findBestMatchWithMargin(descriptor: Float32Array, knownUsers: any[]): M
 }
 
 function _calculateConfidence(distance: number, margin: number | null, supportCount: number): number {
-  const distFactor = Math.max(0, 1 - (distance / MATCH_THRESHOLD));
+  // Nonlinear confidence scaling to reach 90-95% for solid matches
+  // A distance of 0.45 or less is considered a very strong match in InsightFace
+  const normalizedDist = distance / MATCH_THRESHOLD;
+  
+  // Exponential decay curve: stays high for good matches, drops near threshold
+  // confidence = 100 * exp(-2.5 * (dist/threshold)^2)
+  let confidence = 100 * Math.exp(-2.5 * Math.pow(normalizedDist, 2));
 
-  let marginFactor = 1;
+  // Support boost: if multiple embeddings confirm the match, boost confidence
   if (margin !== null && margin < MATCH_CONFIG.ambiguityMargin) {
-    marginFactor = margin / MATCH_CONFIG.ambiguityMargin;
+    const marginPenalty = 1 - (margin / MATCH_CONFIG.ambiguityMargin);
+    confidence *= (1 - 0.3 * marginPenalty); // Max 30% reduction for ambiguity
   }
 
-  let supportFactor = 1;
-  if (USE_MATCHER_V2 && supportCount > 0) {
-    supportFactor = Math.min(1, supportCount / MATCH_CONFIG.robustMinSupport);
+  // Support boost: if multiple embeddings confirm the match, boost confidence
+  if (supportCount > 1) {
+    confidence += (supportCount - 1) * 5; // +5% per supporting embedding
   }
 
-  return Math.round(Math.max(0, Math.min(100, distFactor * marginFactor * supportFactor * 100)));
+  return Math.round(Math.max(0, Math.min(100, confidence)));
 }
 
 /**
  * Calls the Python Microservice for a SINGLE image.
  */
-async function fetchFacesFromPython(imagePath: string): Promise<any[]> {
+async function fetchFacesFromPython(imagePath: string): Promise<any> {
   try {
     const fileBuffer = fs.readFileSync(imagePath);
     const blob = new Blob([fileBuffer], { type: 'image/jpeg' });
@@ -226,11 +237,11 @@ async function fetchFacesFromPython(imagePath: string): Promise<any[]> {
 
     if (!res.ok) {
       console.error(`[AI Engine] Error response from Python API: ${res.statusText}`);
-      return [];
+      return { faces: [], metadata: {} };
     }
 
     const data: any = await res.json();
-    return data.faces || [];
+    return data;
   } catch (err: any) {
     if (err.cause && err.cause.code === 'ECONNREFUSED') {
       console.error(`\n🚨 [CRITICAL AI ERROR] Could not reach the Python Background AI at ${AI_API_URL}.`);
@@ -250,11 +261,11 @@ async function fetchFacesFromPython(imagePath: string): Promise<any[]> {
  * Falls back to sequential single-image requests if the batch endpoint is
  * unavailable (e.g. older Python service version).
  */
-async function fetchFacesFromPythonBatch(imagePaths: string[]): Promise<any[][]> {
+async function fetchFacesFromPythonBatch(imagePaths: string[]): Promise<any[]> {
   if (imagePaths.length === 0) return [];
   if (imagePaths.length === 1) {
-    const faces = await fetchFacesFromPython(imagePaths[0]);
-    return [faces];
+    const data = await fetchFacesFromPython(imagePaths[0]);
+    return [data];
   }
 
   try {
@@ -274,14 +285,12 @@ async function fetchFacesFromPythonBatch(imagePaths: string[]): Promise<any[][]>
       throw new Error(`Batch endpoint returned ${res.status}: ${res.statusText}`);
     }
 
-    const batchResults = (await res.json()) as Array<{ filename: string; faces: any[]; backend?: string }>;
-
-    // Results come back in the same order as files were appended
-    return batchResults.map(r => r.faces || []);
+    const batchResults = (await res.json()) as any[];
+    return batchResults;
   } catch (err: any) {
     console.warn('[AI Engine] Batch endpoint failed, falling back to sequential:', err.message);
     // Graceful fallback: run sequentially
-    const results: any[][] = [];
+    const results: any[] = [];
     for (const imgPath of imagePaths) {
       results.push(await fetchFacesFromPython(imgPath));
     }
@@ -293,15 +302,28 @@ async function fetchFacesFromPythonBatch(imagePaths: string[]): Promise<any[][]>
  * Get the single best/largest face descriptor from an image (for profile pictures).
  */
 async function getFaceDescriptor(imagePath: string): Promise<Float32Array | null> {
-  const faces = await fetchFacesFromPython(imagePath);
+  const data = await fetchFacesFromPython(imagePath);
+  const faces = data.faces || [];
   if (!faces || faces.length === 0) return null;
 
-  // Pick the most prominent face by area size
+  // Pick the most prominent VALID face by area size
   const best = faces.reduce((prev: any, cur: any) => {
+    // If we have a valid face, prefer it. If not, we might fall back to any face for profile pictures
+    // as long as it's the most prominent one.
+    const is_valid = cur.quality && cur.quality.is_valid;
+    
     const area = cur.box._width * cur.box._height;
-    return (!prev || area > prev.area) ? { det: cur, area } : prev;
+    if (!prev) return { det: cur, area, is_valid };
+    
+    // Primary criteria: Is it a "valid" clear face?
+    if (is_valid && !prev.is_valid) return { det: cur, area, is_valid };
+    if (!is_valid && prev.is_valid) return prev;
+    
+    // Secondary criteria: Size
+    return area > prev.area ? { det: cur, area, is_valid } : prev;
   }, null);
 
+  if (!best || !best.det || !best.det.descriptor) return null;
   return l2Normalize(new Float32Array(best.det.descriptor));
 }
 
@@ -316,7 +338,8 @@ async function identifyFace(targetImagePath: string, knownUsers: any[]) {
  * Detect & identify ALL faces in an image
  */
 async function identifyAllFaces(targetImagePath: string, knownUsers: any[]) {
-  const faces = await fetchFacesFromPython(targetImagePath);
+  const data = await fetchFacesFromPython(targetImagePath);
+  const faces = data.faces || [];
   if (!faces || faces.length === 0) return [];
 
   return faces.map((d: any) => {
@@ -338,7 +361,8 @@ async function identifyAllFaces(targetImagePath: string, knownUsers: any[]) {
  * Instant recognition for upload - gets top suggestions per face with confidence
  */
 async function getFaceSuggestions(targetImagePath: string, knownUsers: any[]): Promise<any[]> {
-  const faces = await fetchFacesFromPython(targetImagePath);
+  const data = await fetchFacesFromPython(targetImagePath);
+  const faces = data.faces || [];
   if (!faces || faces.length === 0) return [];
 
   return faces.map((d: any) => {
@@ -365,7 +389,7 @@ async function getFaceSuggestions(targetImagePath: string, knownUsers: any[]): P
     return {
       box: d.box,
       confidence: match.confidence ?? 0,
-      isConfident: (match.confidence ?? 0) >= 80 && match.reason === 'matched',
+      isConfident: (match.confidence ?? 0) >= 90 && match.reason === 'matched',
       topSuggestion: suggestions[0] || null,
       allSuggestions: suggestions.slice(0, 3),
       label: match.label,
@@ -378,7 +402,8 @@ async function getFaceSuggestions(targetImagePath: string, knownUsers: any[]): P
  * Just return all descriptor arrays.
  */
 async function getAllDescriptors(imagePath: string): Promise<Float32Array[]> {
-  const faces = await fetchFacesFromPython(imagePath);
+  const data = await fetchFacesFromPython(imagePath);
+  const faces = data.faces || [];
   return faces.map((d: any) => l2Normalize(new Float32Array(d.descriptor)));
 }
 
@@ -386,15 +411,19 @@ async function getAllDescriptors(imagePath: string): Promise<Float32Array[]> {
  * Core function for bulk gallery scanning — single image.
  */
 async function detectFaces(imagePath: string) {
-  const faces = await fetchFacesFromPython(imagePath);
+  const data = await fetchFacesFromPython(imagePath);
+  const faces = data.faces || [];
 
   const filename = path.basename(imagePath);
   console.log(`[detectFaces] ${filename}: Python Engine found ${faces.length} high-quality face(s)`);
 
-  return faces.map((d: any) => ({
-    descriptor: l2Normalize(new Float32Array(d.descriptor)),
-    box: d.box,
-  }));
+  return {
+    faces: faces.map((d: any) => ({
+      descriptor: l2Normalize(new Float32Array(d.descriptor)),
+      box: d.box,
+    })),
+    metadata: data.metadata || {}
+  };
 }
 
 /**
@@ -402,16 +431,20 @@ async function detectFaces(imagePath: string) {
  * Sends multiple images to Python in ONE request and processes them in parallel.
  * Returns results in same order as imagePaths.
  */
-async function detectFacesBatch(imagePaths: string[]): Promise<Array<Array<{ descriptor: Float32Array; box: any }>>> {
+async function detectFacesBatch(imagePaths: string[]): Promise<Array<{ faces: Array<{ descriptor: Float32Array; box: any }>; metadata: any }>> {
   const rawResults = await fetchFacesFromPythonBatch(imagePaths);
 
-  return rawResults.map((faces, idx) => {
+  return rawResults.map((data: any, idx: any) => {
     const filename = path.basename(imagePaths[idx]);
+    const faces = data.faces || [];
     console.log(`[detectFacesBatch] ${filename}: ${faces.length} face(s) found`);
-    return faces.map((d: any) => ({
-      descriptor: l2Normalize(new Float32Array(d.descriptor)),
-      box: d.box,
-    }));
+    return {
+      faces: faces.map((d: any) => ({
+        descriptor: l2Normalize(new Float32Array(d.descriptor)),
+        box: d.box,
+      })),
+      metadata: data.metadata || {}
+    };
   });
 }
 
