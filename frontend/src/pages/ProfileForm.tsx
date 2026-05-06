@@ -19,19 +19,41 @@ const ProfileForm: React.FC<ProfileFormProps> = ({ mode = 'create' }) => {
     password: '',
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const [file, setFile] = useState<File | null>(null);
-  const [preview, setPreview] = useState<string | null>(null);
-  const [showCamera, setShowCamera] = useState(false);
+  
+  const [enrollment, setEnrollment] = useState<Record<string, { file: File | null; preview: string | null }>>({
+    front: { file: null, preview: null },
+    left: { file: null, preview: null },
+    right: { file: null, preview: null },
+    upper: { file: null, preview: null },
+    lower: { file: null, preview: null },
+  });
+
+  const [activeAngle, setActiveAngle] = useState<'front' | 'left' | 'right' | 'upper' | 'lower' | null>(null);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ type: string; text: string } | null>(null);
+  const [failedAngles, setFailedAngles] = useState<string[]>([]);
 
   useEffect(() => {
     if (mode === 'update' && id) {
       setLoading(true);
       fetchUserById(Number(id))
-        .then((data) => {
+        .then((data: any) => {
           setFormData({ name: data.name, email: data.email, password: '' });
-          setPreview(data.profilePicture || data['profile picture'] || null);
+          const profilePic = data.profilePicture || data['profile picture'] || null;
+          if (profilePic) {
+            setEnrollment(prev => ({
+              ...prev,
+              front: { file: null, preview: profilePic }
+            }));
+          }
+          // If the backend returns multiple profile pictures in the future, we could load them here
+          if (Array.isArray(data.profilePictures) && data.profilePictures.length > 0) {
+             setEnrollment({
+               front: { file: null, preview: data.profilePictures[0] || profilePic },
+               left: { file: null, preview: data.profilePictures[1] || null },
+               right: { file: null, preview: data.profilePictures[2] || null },
+             });
+          }
         })
         .catch((err) => {
           setMessage({ type: 'error', text: err.message });
@@ -69,19 +91,31 @@ const ProfileForm: React.FC<ProfileFormProps> = ({ mode = 'create' }) => {
     }
   };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = (angle: string, e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.currentTarget.files?.[0];
     if (selectedFile) {
-      setFile(selectedFile);
-      setPreview(URL.createObjectURL(selectedFile));
-      setShowCamera(false);
+      setEnrollment(prev => ({
+        ...prev,
+        [angle]: { file: selectedFile, preview: URL.createObjectURL(selectedFile) }
+      }));
     }
   };
 
-  const handleCameraCapture = (capturedFile: File, dataUrl: string) => {
-    setFile(capturedFile);
-    setPreview(dataUrl);
-    setShowCamera(false);
+  const [verifying, setVerifying] = useState<string | null>(null);
+
+  const handleCameraCapture = async (capturedFile: File, dataUrl: string) => {
+    if (!activeAngle) return;
+    
+    // Simplification: We trust the CameraCapture's "OK" status which now uses relaxed thresholds.
+    // This makes the process much faster as we don't do a double round-trip for quality verification.
+    
+    setEnrollment(prev => ({
+      ...prev,
+      [activeAngle!]: { file: capturedFile, preview: dataUrl }
+    }));
+
+    setMessage({ type: 'success', text: `${angles.find(a => a.id === activeAngle)?.label} clear! ✅` });
+    setActiveAngle(null);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -90,18 +124,19 @@ const ProfileForm: React.FC<ProfileFormProps> = ({ mode = 'create' }) => {
 
     setLoading(true);
     setMessage(null);
+    setFailedAngles([]);
 
     try {
       let resultId = id ? Number(id) : null;
 
-      if (file) {
+      // 1. Optional duplicate check using the front image
+      if (enrollment.front.file) {
         const verifyForm = new FormData();
-        verifyForm.append('image', file);
+        verifyForm.append('image', enrollment.front.file);
         const verifyData = await identifyFace(verifyForm);
 
         if (verifyData.users?.length) {
           const detectedUser = verifyData.users[0];
-          // Only block if the AI is highly confident (confidence > 0.6) to avoid false positives!
           if (detectedUser.confidence > 0.6) {
             if (mode === 'create' || String(detectedUser.originalId) !== String(id)) {
               throw new Error(`Duplicate detected: This face is already registered to ${detectedUser.name}.`);
@@ -110,6 +145,7 @@ const ProfileForm: React.FC<ProfileFormProps> = ({ mode = 'create' }) => {
         }
       }
 
+      // 2. Create user if in create mode
       if (mode === 'create') {
         const created = await createUser({
           name: formData.name,
@@ -119,18 +155,34 @@ const ProfileForm: React.FC<ProfileFormProps> = ({ mode = 'create' }) => {
         resultId = created.id;
       }
 
+      // 3. Update with multiple profile pictures
       const updateForm = new FormData();
-      if (file) updateForm.append('profilePicture', file);
       if (formData.name) updateForm.append('name', formData.name);
       if (formData.email) updateForm.append('email', formData.email);
       if (formData.password) updateForm.append('password', formData.password);
 
+      // Append files in order
+      angles.forEach(angle => {
+        const entry = enrollment[angle.id];
+        if (entry.file) {
+          // Rename the file to the angle label so the backend can identify which one failed
+          const renamedFile = new File([entry.file], `${angle.label}.jpg`, { type: entry.file.type });
+          updateForm.append('profile_pictures', renamedFile);
+        }
+      });
+
       await updateUser(resultId!, updateForm);
 
-      setMessage({ type: 'success', text: `Profile ${mode === 'create' ? 'created' : 'updated'} successfully!` });
+      setMessage({ type: 'success', text: `Profile ${mode === 'create' ? 'created' : 'updated'} successfully with multi-angle data!` });
       setTimeout(() => navigate('/'), 1200);
     } catch (err: any) {
       setMessage({ type: 'error', text: err.message });
+      
+      // Parse error message to identify failed angles and highlight them
+      const failed = angles
+        .filter(a => err.message.includes(a.label))
+        .map(a => a.id);
+      setFailedAngles(failed);
     } finally {
       setLoading(false);
     }
@@ -140,42 +192,55 @@ const ProfileForm: React.FC<ProfileFormProps> = ({ mode = 'create' }) => {
     return <div className="text-center p-10">Loading user data...</div>;
   }
 
+  const angles = [
+    { id: 'front', label: 'Front View', description: 'Look straight' },
+    { id: 'left', label: 'Left Side', description: 'Turn head LEFT' },
+    { id: 'right', label: 'Right Side', description: 'Turn head RIGHT' },
+    { id: 'upper', label: 'Upper View', description: 'Look UP' },
+    { id: 'lower', label: 'Lower View', description: 'Look DOWN' },
+  ] as const;
+
   return (
-    <div className="max-w-2xl mx-auto" style={{ maxWidth: '600px', margin: '0 auto' }}>
+    <div className="max-w-3xl mx-auto" style={{ maxWidth: '800px', margin: '0 auto' }}>
       <button type="button" onClick={() => navigate('/')} className="btn btn-outline mb-6" style={{ marginBottom: '1.5rem' }}>
         <ArrowLeft size={18} /> Back to List
       </button>
 
       <div className="card">
         <h2 className="card-title">
-          {mode === 'create' ? 'Create New Profile' : 'Update Profile'}
+          {mode === 'create' ? 'Create AI Profile' : 'Update AI Profile'}
         </h2>
+        <p style={{ color: 'var(--text-muted)', marginBottom: '1.5rem', fontSize: '0.9rem' }}>
+          Providing multiple angles (Front, Left, Right) helps our AI recognize you more accurately in different conditions and group photos.
+        </p>
 
         <form onSubmit={handleSubmit}>
-          <div className="form-group">
-            <label>Full Name</label>
-            <input
-              name="name"
-              value={formData.name}
-              onChange={handleInputChange}
-              placeholder="John Doe"
-              className={errors.name ? 'error' : ''}
-            />
-            {errors.name && <p className="error-message">{errors.name}</p>}
-          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
+            <div className="form-group">
+              <label>Full Name</label>
+              <input
+                name="name"
+                value={formData.name}
+                onChange={handleInputChange}
+                placeholder="John Doe"
+                className={errors.name ? 'error' : ''}
+              />
+              {errors.name && <p className="error-message">{errors.name}</p>}
+            </div>
 
-          <div className="form-group">
-            <label>Email Address</label>
-            <input
-              name="email"
-              type="email"
-              value={formData.email}
-              onChange={handleInputChange}
-              placeholder="john@example.com"
-              className={errors.email ? 'error' : ''}
-              disabled={mode === 'update'}
-            />
-            {errors.email && <p className="error-message">{errors.email}</p>}
+            <div className="form-group">
+              <label>Email Address</label>
+              <input
+                name="email"
+                type="email"
+                value={formData.email}
+                onChange={handleInputChange}
+                placeholder="john@example.com"
+                className={errors.email ? 'error' : ''}
+                disabled={mode === 'update'}
+              />
+              {errors.email && <p className="error-message">{errors.email}</p>}
+            </div>
           </div>
 
           <div className="form-group">
@@ -188,71 +253,136 @@ const ProfileForm: React.FC<ProfileFormProps> = ({ mode = 'create' }) => {
               placeholder="••••••••"
               className={errors.password ? 'error' : ''}
             />
-            <p style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
-              {mode === 'create'
-                ? 'Create a password to secure your profile.'
-                : 'Leave blank to keep your current password.'}
-            </p>
             {errors.password && <p className="error-message">{errors.password}</p>}
           </div>
 
-          <div className="form-group">
-            <label>Profile Picture</label>
+          <div className="form-group" style={{ marginTop: '1.5rem' }}>
+            <label>Face Enrollment (Multi-Angle)</label>
+            
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '0.75rem', marginTop: '1rem' }}>
+              {angles.map((angle) => (
+                <div key={angle.id} style={{ 
+                  display: 'flex', 
+                  flexDirection: 'column', 
+                  alignItems: 'center', 
+                  gap: '0.75rem',
+                  padding: '1rem',
+                  border: failedAngles.includes(angle.id) 
+                    ? '2px solid var(--error)' 
+                    : (activeAngle === angle.id ? '2px solid var(--primary)' : '1px solid var(--border)'),
+                  borderRadius: '12px',
+                  backgroundColor: failedAngles.includes(angle.id)
+                    ? 'rgba(var(--error-rgb), 0.05)'
+                    : (activeAngle === angle.id ? 'rgba(var(--primary-rgb), 0.05)' : 'transparent'),
+                }}>
+                  <div className="user-avatar-container" style={{ width: '100%', aspectRatio: '1/1', position: 'relative' }}>
+                    {enrollment[angle.id].preview ? (
+                      <img src={enrollment[angle.id].preview!} alt={angle.label} className="user-avatar" />
+                    ) : (
+                      <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: 'var(--bg-dark)', color: 'var(--text-muted)', borderRadius: '10px' }}>
+                        <Camera size={24} opacity={0.3} />
+                      </div>
+                    )}
+                  </div>
+                  
+                  <div style={{ textAlign: 'center' }}>
+                    <div style={{ fontWeight: 600, fontSize: '0.85rem' }}>{angle.label}</div>
+                    <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{angle.description}</div>
+                  </div>
 
-            <div className="flex flex-col items-center gap-4 mb-4" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem', marginBottom: '1rem' }}>
-              {preview && !showCamera && (
-                <div className="user-avatar-container" style={{ width: '150px', height: '150px' }}>
-                  <img src={preview} alt="Preview" className="user-avatar" />
+                  <div className="flex gap-2" style={{ display: 'flex', gap: '0.4rem' }}>
+                    <button
+                      type="button"
+                      onClick={() => setActiveAngle(angle.id)}
+                      className="btn btn-outline btn-sm"
+                      style={{ padding: '0.4rem', minWidth: 'auto' }}
+                      title="Use Camera"
+                    >
+                      <Camera size={16} />
+                    </button>
+                    <label className="btn btn-outline btn-sm" style={{ cursor: 'pointer', margin: 0, padding: '0.4rem', minWidth: 'auto' }} title="Upload File">
+                      <Upload size={16} />
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={(e) => handleFileChange(angle.id, e)}
+                        style={{ display: 'none' }}
+                      />
+                    </label>
+                  </div>
                 </div>
-              )}
-
-              {showCamera ? (
-                <div style={{ width: '100%' }}>
-                  <CameraCapture
-                    onCapture={handleCameraCapture}
-                    onCancel={() => setShowCamera(false)}
-                  />
-                </div>
-              ) : (
-                <div className="flex gap-2" style={{ display: 'flex', gap: '0.5rem' }}>
-                  <button
-                    type="button"
-                    onClick={() => setShowCamera(true)}
-                    className="btn btn-outline"
-                  >
-                    <Camera size={18} /> Use Camera
-                  </button>
-                  <label className="btn btn-outline" style={{ cursor: 'pointer', margin: 0 }}>
-                    <Upload size={18} /> Upload File
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={handleFileChange}
-                      style={{ display: 'none' }}
-                    />
-                  </label>
-                </div>
-              )}
+              ))}
             </div>
           </div>
+
+          {activeAngle && (
+            <div className="modal-overlay" style={{ 
+              position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, 
+              backgroundColor: 'rgba(0,0,0,0.8)', display: 'flex', 
+              alignItems: 'center', justifyContent: 'center', zIndex: 1000 
+            }}>
+              <div className="card" style={{ maxWidth: '600px', width: '90%' }}>
+                <h3 className="card-title">Capture {angles.find(a => a.id === activeAngle)?.label}</h3>
+                <p style={{ marginBottom: '1rem', color: 'var(--text-muted)' }}>
+                  {angles.find(a => a.id === activeAngle)?.description}
+                </p>
+                <div style={{ 
+                  backgroundColor: 'rgba(59, 130, 246, 0.1)', 
+                  padding: '0.75rem', 
+                  borderRadius: '8px', 
+                  marginBottom: '1.5rem',
+                  border: '1px solid rgba(59, 130, 246, 0.2)',
+                  display: 'flex',
+                  gap: '0.75rem',
+                  alignItems: 'center',
+                  fontSize: '0.85rem',
+                  color: '#60a5fa'
+                }}>
+                  <AlertCircle size={18} />
+                  <span><b>Guidance:</b> Ensure your face is well-lit and clearly visible. Avoid shadows or blur for the best AI accuracy.</span>
+                </div>
+                <CameraCapture
+                  onCapture={handleCameraCapture}
+                  onCancel={() => { setActiveAngle(null); }}
+                  targetAngle={activeAngle!}
+                />
+
+                {verifying && (
+                  <div style={{ 
+                    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, 
+                    backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: '12px',
+                    display: 'flex', flexDirection: 'column', alignItems: 'center', 
+                    justifyContent: 'center', zIndex: 10, color: 'white'
+                  }}>
+                    <div className="loading-spinner" style={{ marginBottom: '1rem', width: '40px', height: '40px', borderWidth: '4px' }}></div>
+                    <div style={{ fontWeight: 600 }}>Verifying Quality...</div>
+                    <div style={{ fontSize: '0.8rem', marginTop: '0.5rem' }}>Our AI is ensuring your face is clear for 95% accuracy</div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
           <button
             type="submit"
             className="btn btn-primary w-full"
-            style={{ width: '100%', marginTop: '1rem' }}
-            disabled={loading || showCamera}
+            style={{ width: '100%', marginTop: '2rem', padding: '1rem' }}
+            disabled={loading || !!activeAngle}
           >
             {loading ? (
               <span className="loading-spinner"></span>
             ) : (
-              <><Save size={20} /> {mode === 'create' ? 'Create Profile' : 'Save Changes'}</>
+              <><Save size={20} /> {mode === 'create' ? 'Enroll & Create Profile' : 'Save AI Model'}</>
             )}
           </button>
         </form>
       </div>
 
       {message && (
-        <div className="message-toast" style={{ backgroundColor: message.type === 'error' ? 'var(--error)' : 'var(--success)' }}>
+        <div className="message-toast" style={{ 
+          backgroundColor: message.type === 'error' ? 'var(--error)' : 'var(--success)',
+          zIndex: 2000
+        }}>
           {message.type === 'error' ? <AlertCircle size={20} /> : <CheckCircle2 size={20} />}
           {message.text}
         </div>

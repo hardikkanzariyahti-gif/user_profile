@@ -1,7 +1,11 @@
 import { request } from './apiClient';
 
-export function fetchGallery(userId?: number): Promise<any> {
-  const query = userId ? `?userId=${encodeURIComponent(userId)}` : '';
+export function fetchGallery(userId?: number, search: string = ''): Promise<any> {
+  const params = new URLSearchParams();
+  if (userId) params.append('userId', String(userId));
+  if (search) params.append('search', search);
+  
+  const query = params.toString() ? `?${params.toString()}` : '';
   return request(`/api/gallery${query}`);
 }
 

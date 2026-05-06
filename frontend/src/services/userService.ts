@@ -36,3 +36,10 @@ export function deleteUser(id: number): Promise<any> {
     method: 'DELETE',
   });
 }
+
+export function verifyFaceQuality(formData: FormData): Promise<any> {
+  return request('/api/users/verify-quality', {
+    method: 'POST',
+    body: formData,
+  });
+}

@@ -23,6 +23,12 @@ interface GalleryItem {
   recognizedUsers?: UserProfile[];
   faces?: any[];
   hashtags?: string[];
+  metadata?: {
+    person_count?: number;
+    dominant_color?: string;
+    aspect_ratio?: number;
+    orientation?: string;
+  };
 }
 
 interface GalleryProps {
@@ -43,6 +49,7 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
   const [editingHashtags, setEditingHashtags] = useState(false);
   const [hashtagsDraft, setHashtagsDraft] = useState('');
   const [savingHashtags, setSavingHashtags] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
   const [openHashtagsEditorNext, setOpenHashtagsEditorNext] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [syncMenuOpen, setSyncMenuOpen] = useState(false);
@@ -102,7 +109,7 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
     if (!silent) setLoading(true);
     try {
       const userIdToFetch = (viewMode === 'personal' && loggedInUserId) ? loggedInUserId : undefined;
-      const data = await fetchGallery(userIdToFetch);
+      const data = await fetchGallery(userIdToFetch, searchQuery);
       setImages(data);
     } catch (err) {
       console.error(err);
@@ -434,6 +441,22 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
     }
   };
 
+  const handleRescanItem = async (img: GalleryItem) => {
+    const id = typeof img.id === 'string' ? parseInt(img.id.replace('profile-', ''), 10) : img.id;
+    if (isNaN(id as number)) return;
+
+    setRefreshing(true);
+    try {
+      await forceScanItem(id as number);
+      await loadGallery(true);
+      setMessage({ type: 'success', text: 'Photo rescanned.' });
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err.message || 'Rescan failed.' });
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
   // --- Album Selection Handlers ---
   const toggleSelectionMode = () => {
     setIsSelectionMode(!isSelectionMode);
@@ -558,8 +581,37 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
           <p className="text-muted" style={{ fontSize: '0.9rem' }}>
             {viewMode === 'personal' && loggedInUser
               ? `Smart gallery showing photos matched to ${loggedInUser.name}.`
-              : 'Explore all community photos and identified profiles. To label unknown faces, use the People page.'}
+              : 'Explore all community photos and identified profiles.'}
           </p>
+        </div>
+
+        <div style={{ flex: 1, maxWidth: '400px', position: 'relative' }}>
+          <input
+            type="text"
+            placeholder="Search by name, tag, color, or objects..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            style={{
+              width: '100%',
+              padding: '0.85rem 1.5rem 0.85rem 3rem',
+              borderRadius: '16px',
+              border: '1px solid var(--border-color)',
+              background: 'white',
+              fontSize: '1rem',
+              boxShadow: '0 4px 12px rgba(0,0,0,0.05)',
+              outline: 'none',
+              transition: 'all 0.2s'
+            }}
+          />
+          <Hash size={18} style={{ position: 'absolute', left: '1.25rem', top: '50%', transform: 'translateY(-50%)', opacity: 0.4 }} />
+          {searchQuery && (
+            <button
+              onClick={() => setSearchQuery('')}
+              style={{ position: 'absolute', right: '1rem', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', opacity: 0.5 }}
+            >
+              <X size={16} />
+            </button>
+          )}
         </div>
 
         <div className="flex items-center gap-4" style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
@@ -782,7 +834,7 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
                 key={img.id}
                 initial={{ opacity: 0, scale: 0.9 }}
                 animate={{ opacity: 1, scale: 1 }}
-                transition={{ duration: 0.3, delay: index * 0.05 }}
+                transition={{ duration: 0.2 }}
                 className={`gallery-card ${selectedIds.includes(Number(img.id)) ? 'selected' : ''}`}
                 onClick={() => toggleImageSelection(Number(img.id))}
                 style={{
@@ -1016,21 +1068,36 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
           >
             <div style={{ position: 'absolute', top: '2rem', right: '2rem', zIndex: 2001, display: 'flex', gap: '0.75rem' }}>
               {selectedImage && !selectedImage.isProfile && (
-                <button
-                  onClick={() => handleDeleteImage(selectedImage)}
-                  disabled={deleting}
-                  title="Delete this photo"
-                  style={{
-                    padding: '12px', borderRadius: '50%',
-                    background: deleting ? 'rgba(239,68,68,0.4)' : 'rgba(239,68,68,0.85)',
-                    border: '1px solid rgba(255,255,255,0.15)',
-                    color: 'white', cursor: deleting ? 'not-allowed' : 'pointer',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    transition: 'background 0.2s',
-                  }}
-                >
-                  {deleting ? <div className="loading-spinner" style={{ width: 22, height: 22, borderWidth: 2 }} /> : <Trash2 size={22} />}
-                </button>
+                <div style={{ display: 'flex', gap: '0.75rem' }}>
+                  <button
+                    onClick={() => handleRescanItem(selectedImage)}
+                    disabled={refreshing}
+                    title="Rescan this photo (AI Re-detection)"
+                    style={{
+                      padding: '12px', borderRadius: '50%',
+                      background: refreshing ? 'rgba(99,102,241,0.4)' : 'rgba(99,102,241,0.85)',
+                      border: '1px solid rgba(255,255,255,0.15)',
+                      color: 'white', cursor: refreshing ? 'not-allowed' : 'pointer',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    }}
+                  >
+                    <RefreshCw size={22} style={{ animation: refreshing ? 'spin 1s linear infinite' : 'none' }} />
+                  </button>
+                  <button
+                    onClick={() => handleDeleteImage(selectedImage)}
+                    disabled={deleting}
+                    title="Delete this photo"
+                    style={{
+                      padding: '12px', borderRadius: '50%',
+                      background: deleting ? 'rgba(239,68,68,0.4)' : 'rgba(239,68,68,0.85)',
+                      border: '1px solid rgba(255,255,255,0.15)',
+                      color: 'white', cursor: deleting ? 'not-allowed' : 'pointer',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    }}
+                  >
+                    {deleting ? <div className="loading-spinner" style={{ width: 22, height: 22, borderWidth: 2 }} /> : <Trash2 size={22} />}
+                  </button>
+                </div>
               )}
               <button onClick={handleClosePreview} className="btn btn-danger" style={{ padding: '12px', borderRadius: '50%', background: 'rgba(255,255,255,0.1)', border: 'none', color: 'white' }}>
                 <X size={32} />
@@ -1267,6 +1334,45 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser }) => {
                   </div>
                 )}
               </div>
+
+              {/* AI Metadata & Smart Info */}
+              {selectedImage.metadata && (
+                <div style={{
+                  background: 'rgba(255, 255, 255, 0.05)',
+                  backdropFilter: 'blur(20px)',
+                  padding: '1rem 2rem',
+                  borderRadius: '24px',
+                  border: '1px solid rgba(255,255,255,0.1)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '2.5rem',
+                  width: 'max-content',
+                  maxWidth: '90vw',
+                  overflowX: 'auto'
+                }}>
+                  {selectedImage.metadata.person_count !== undefined && (
+                    <div style={{ textAlign: 'center' }}>
+                      <div style={{ color: 'white', opacity: 0.5, fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4 }}>Faces</div>
+                      <div style={{ color: 'white', fontWeight: 800, fontSize: '1.1rem' }}>{selectedImage.metadata.person_count} Detected</div>
+                    </div>
+                  )}
+                  {selectedImage.metadata.dominant_color && (
+                    <div style={{ textAlign: 'center' }}>
+                      <div style={{ color: 'white', opacity: 0.5, fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4 }}>Main Color</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <div style={{ width: 16, height: 16, borderRadius: '50%', background: selectedImage.metadata.dominant_color, border: '1px solid rgba(255,255,255,0.2)' }} />
+                        <div style={{ color: 'white', fontWeight: 800, fontSize: '1rem', textTransform: 'uppercase' }}>{selectedImage.metadata.dominant_color}</div>
+                      </div>
+                    </div>
+                  )}
+                  {selectedImage.metadata.orientation && (
+                    <div style={{ textAlign: 'center' }}>
+                      <div style={{ color: 'white', opacity: 0.5, fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4 }}>Shot Type</div>
+                      <div style={{ color: 'white', fontWeight: 800, fontSize: '1.1rem', textTransform: 'capitalize' }}>{selectedImage.metadata.orientation}</div>
+                    </div>
+                  )}
+                </div>
+              )}
             </motion.div>
           </motion.div>
         )}
