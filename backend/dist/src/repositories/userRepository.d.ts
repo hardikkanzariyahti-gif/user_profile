@@ -8,6 +8,7 @@ interface UserUpdateData {
     email?: string;
     password?: string;
     profile_picture?: string;
+    profile_pictures?: string[];
     profileDescriptor?: any;
 }
 declare const userRepository: {
@@ -16,6 +17,7 @@ declare const userRepository: {
         email: string;
         password: string;
         profile_picture: string | null;
+        profile_pictures: string[];
         profileDescriptor: import("@prisma/client/runtime/library").JsonValue | null;
         id: number;
     }, never, import("@prisma/client/runtime/library").DefaultArgs>;
@@ -24,6 +26,7 @@ declare const userRepository: {
         email: string;
         password: string;
         profile_picture: string | null;
+        profile_pictures: string[];
         profileDescriptor: import("@prisma/client/runtime/library").JsonValue | null;
         id: number;
     } | null, null, import("@prisma/client/runtime/library").DefaultArgs>;
@@ -32,6 +35,7 @@ declare const userRepository: {
         email: string;
         password: string;
         profile_picture: string | null;
+        profile_pictures: string[];
         profileDescriptor: import("@prisma/client/runtime/library").JsonValue | null;
         id: number;
     }[]>;
@@ -40,6 +44,7 @@ declare const userRepository: {
         email: string;
         password: string;
         profile_picture: string | null;
+        profile_pictures: string[];
         profileDescriptor: import("@prisma/client/runtime/library").JsonValue | null;
         id: number;
     } | null, null, import("@prisma/client/runtime/library").DefaultArgs>;
@@ -53,6 +58,7 @@ declare const userRepository: {
         email: string;
         password: string;
         profile_picture: string | null;
+        profile_pictures: string[];
         profileDescriptor: import("@prisma/client/runtime/library").JsonValue | null;
         id: number;
     }, never, import("@prisma/client/runtime/library").DefaultArgs>;
@@ -61,6 +67,7 @@ declare const userRepository: {
         email: string;
         password: string;
         profile_picture: string | null;
+        profile_pictures: string[];
         profileDescriptor: import("@prisma/client/runtime/library").JsonValue | null;
         id: number;
     }, never, import("@prisma/client/runtime/library").DefaultArgs>;
@@ -68,6 +75,7 @@ declare const userRepository: {
         name: string;
         email: string;
         profile_picture: string | null;
+        profile_pictures: string[];
         profileDescriptor: import("@prisma/client/runtime/library").JsonValue;
         id: number;
     }[]>;
@@ -75,6 +83,7 @@ declare const userRepository: {
         name: string;
         email: string;
         profile_picture: string | null;
+        profile_pictures: string[];
         profileDescriptor: import("@prisma/client/runtime/library").JsonValue;
         id: number;
     }[]>;

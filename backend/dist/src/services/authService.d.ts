@@ -6,7 +6,9 @@ declare const authService: {
             name: string;
             email: string;
             profilePicture: string | null | undefined;
+            profilePictures: (string | null | undefined)[];
             "profile picture": string | null | undefined;
+            "profile pictures": (string | null | undefined)[];
         };
     }>;
 };

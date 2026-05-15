@@ -14,19 +14,69 @@ export declare class LabeledFaceDescriptors {
  */
 declare function buildLabeledDescriptors(users: any[]): Promise<LabeledFaceDescriptors[]>;
 declare const galleryService: {
-    listGallery(userId?: any): Promise<{
+    listGallery(userId?: any, search?: string): Promise<{
         id: number;
         url: string | null | undefined;
+        thumbnailUrl: string | null | undefined;
         uploadedAt: Date;
         label: string | null | undefined;
         isProfile: boolean;
         userId: number | null | undefined;
+        metadata: {
+            description: any;
+            aiSummary: any;
+            scene: any;
+            detectedObjects: any;
+            hashtags: any;
+            ocrText: any;
+            peopleCount: any;
+            eventName: any;
+            location: any;
+            dominantColor: any;
+            aspectRatio: any;
+            customDetails: {
+                dominant_color: any;
+                aspect_ratio: any;
+                orientation: any;
+                generatedAt: any;
+                metadataVersion: any;
+            };
+            objects: any;
+            scenes: any;
+            caption: any;
+            person_count: any;
+            dominant_color: any;
+            aspect_ratio: any;
+            orientation: any;
+            customLocation: any;
+            customEvent: any;
+            lastScanError: any;
+            lastMetaError: any;
+        };
+        people: {
+            id: any;
+            name: any;
+            profilePicture: string | null;
+        }[];
+        scanStatus: string;
+        metadataStatus: string;
+        lastScanError: any;
+        lastMetaError: any;
         recognizedUserIds: number[];
-        hashtags: string[];
+        hashtags: any;
+        objectTags: any;
+        sceneTags: any;
+        ocrText: any;
         faces: {
-            index: number;
+            faceId: string;
             box: any;
-            manuallyTaggedUserId: any;
+            expandedBox: any;
+            personId: any;
+            personName: any;
+            similarity: any;
+            status: any;
+            confidence: any;
+            reason: any;
         }[];
         recognizedUsers: {
             id: any;
@@ -37,16 +87,66 @@ declare const galleryService: {
     getGalleryItem(id: number): Promise<{
         id: number;
         url: string | null | undefined;
+        thumbnailUrl: string | null | undefined;
         uploadedAt: Date;
         label: string | null | undefined;
         isProfile: boolean;
         userId: number | null | undefined;
+        metadata: {
+            description: any;
+            aiSummary: any;
+            scene: any;
+            detectedObjects: any;
+            hashtags: any;
+            ocrText: any;
+            peopleCount: any;
+            eventName: any;
+            location: any;
+            dominantColor: any;
+            aspectRatio: any;
+            customDetails: {
+                dominant_color: any;
+                aspect_ratio: any;
+                orientation: any;
+                generatedAt: any;
+                metadataVersion: any;
+            };
+            objects: any;
+            scenes: any;
+            caption: any;
+            person_count: any;
+            dominant_color: any;
+            aspect_ratio: any;
+            orientation: any;
+            customLocation: any;
+            customEvent: any;
+            lastScanError: any;
+            lastMetaError: any;
+        };
+        people: {
+            id: any;
+            name: any;
+            profilePicture: string | null;
+        }[];
+        scanStatus: string;
+        metadataStatus: string;
+        lastScanError: any;
+        lastMetaError: any;
         recognizedUserIds: number[];
-        hashtags: string[];
+        hashtags: any;
+        objectTags: any;
+        sceneTags: any;
+        ocrText: any;
         faces: {
-            index: number;
+            faceId: string;
             box: any;
-            manuallyTaggedUserId: any;
+            expandedBox: any;
+            personId: any;
+            personName: any;
+            similarity: any;
+            status: any;
+            confidence: any;
+            reason: any;
         }[];
         recognizedUsers: {
             id: any;
@@ -60,16 +160,136 @@ declare const galleryService: {
     setGalleryItemHashtags(id: number, hashtagsInput: any): Promise<{
         id: number;
         url: string | null | undefined;
+        thumbnailUrl: string | null | undefined;
         uploadedAt: Date;
         label: string | null | undefined;
         isProfile: boolean;
         userId: number | null | undefined;
+        metadata: {
+            description: any;
+            aiSummary: any;
+            scene: any;
+            detectedObjects: any;
+            hashtags: any;
+            ocrText: any;
+            peopleCount: any;
+            eventName: any;
+            location: any;
+            dominantColor: any;
+            aspectRatio: any;
+            customDetails: {
+                dominant_color: any;
+                aspect_ratio: any;
+                orientation: any;
+                generatedAt: any;
+                metadataVersion: any;
+            };
+            objects: any;
+            scenes: any;
+            caption: any;
+            person_count: any;
+            dominant_color: any;
+            aspect_ratio: any;
+            orientation: any;
+            customLocation: any;
+            customEvent: any;
+            lastScanError: any;
+            lastMetaError: any;
+        };
+        people: {
+            id: any;
+            name: any;
+            profilePicture: string | null;
+        }[];
+        scanStatus: string;
+        metadataStatus: string;
+        lastScanError: any;
+        lastMetaError: any;
         recognizedUserIds: number[];
-        hashtags: string[];
+        hashtags: any;
+        objectTags: any;
+        sceneTags: any;
+        ocrText: any;
         faces: {
-            index: number;
+            faceId: string;
             box: any;
-            manuallyTaggedUserId: any;
+            expandedBox: any;
+            personId: any;
+            personName: any;
+            similarity: any;
+            status: any;
+            confidence: any;
+            reason: any;
+        }[];
+        recognizedUsers: {
+            id: any;
+            name: any;
+            profilePicture: string | null;
+        }[];
+    }>;
+    setGalleryItemCustomMetadata(id: number, customLocation: string, customEvent: string): Promise<{
+        id: number;
+        url: string | null | undefined;
+        thumbnailUrl: string | null | undefined;
+        uploadedAt: Date;
+        label: string | null | undefined;
+        isProfile: boolean;
+        userId: number | null | undefined;
+        metadata: {
+            description: any;
+            aiSummary: any;
+            scene: any;
+            detectedObjects: any;
+            hashtags: any;
+            ocrText: any;
+            peopleCount: any;
+            eventName: any;
+            location: any;
+            dominantColor: any;
+            aspectRatio: any;
+            customDetails: {
+                dominant_color: any;
+                aspect_ratio: any;
+                orientation: any;
+                generatedAt: any;
+                metadataVersion: any;
+            };
+            objects: any;
+            scenes: any;
+            caption: any;
+            person_count: any;
+            dominant_color: any;
+            aspect_ratio: any;
+            orientation: any;
+            customLocation: any;
+            customEvent: any;
+            lastScanError: any;
+            lastMetaError: any;
+        };
+        people: {
+            id: any;
+            name: any;
+            profilePicture: string | null;
+        }[];
+        scanStatus: string;
+        metadataStatus: string;
+        lastScanError: any;
+        lastMetaError: any;
+        recognizedUserIds: number[];
+        hashtags: any;
+        objectTags: any;
+        sceneTags: any;
+        ocrText: any;
+        faces: {
+            faceId: string;
+            box: any;
+            expandedBox: any;
+            personId: any;
+            personName: any;
+            similarity: any;
+            status: any;
+            confidence: any;
+            reason: any;
         }[];
         recognizedUsers: {
             id: any;
@@ -80,16 +300,66 @@ declare const galleryService: {
     searchGalleryByHashtag(rawTag: string): Promise<{
         id: number;
         url: string | null | undefined;
+        thumbnailUrl: string | null | undefined;
         uploadedAt: Date;
         label: string | null | undefined;
         isProfile: boolean;
         userId: number | null | undefined;
+        metadata: {
+            description: any;
+            aiSummary: any;
+            scene: any;
+            detectedObjects: any;
+            hashtags: any;
+            ocrText: any;
+            peopleCount: any;
+            eventName: any;
+            location: any;
+            dominantColor: any;
+            aspectRatio: any;
+            customDetails: {
+                dominant_color: any;
+                aspect_ratio: any;
+                orientation: any;
+                generatedAt: any;
+                metadataVersion: any;
+            };
+            objects: any;
+            scenes: any;
+            caption: any;
+            person_count: any;
+            dominant_color: any;
+            aspect_ratio: any;
+            orientation: any;
+            customLocation: any;
+            customEvent: any;
+            lastScanError: any;
+            lastMetaError: any;
+        };
+        people: {
+            id: any;
+            name: any;
+            profilePicture: string | null;
+        }[];
+        scanStatus: string;
+        metadataStatus: string;
+        lastScanError: any;
+        lastMetaError: any;
         recognizedUserIds: number[];
-        hashtags: string[];
+        hashtags: any;
+        objectTags: any;
+        sceneTags: any;
+        ocrText: any;
         faces: {
-            index: number;
+            faceId: string;
             box: any;
-            manuallyTaggedUserId: any;
+            expandedBox: any;
+            personId: any;
+            personName: any;
+            similarity: any;
+            status: any;
+            confidence: any;
+            reason: any;
         }[];
         recognizedUsers: {
             id: any;
@@ -100,77 +370,90 @@ declare const galleryService: {
     uploadGallery(files?: any[], userId?: any): Promise<{
         id: number;
         url: string | null | undefined;
+        thumbnailUrl: string | null | undefined;
         uploadedAt: Date;
         label: string | null | undefined;
         isProfile: boolean;
         userId: number | null | undefined;
+        metadata: {
+            description: any;
+            aiSummary: any;
+            scene: any;
+            detectedObjects: any;
+            hashtags: any;
+            ocrText: any;
+            peopleCount: any;
+            eventName: any;
+            location: any;
+            dominantColor: any;
+            aspectRatio: any;
+            customDetails: {
+                dominant_color: any;
+                aspect_ratio: any;
+                orientation: any;
+                generatedAt: any;
+                metadataVersion: any;
+            };
+            objects: any;
+            scenes: any;
+            caption: any;
+            person_count: any;
+            dominant_color: any;
+            aspect_ratio: any;
+            orientation: any;
+            customLocation: any;
+            customEvent: any;
+            lastScanError: any;
+            lastMetaError: any;
+        };
+        people: {
+            id: any;
+            name: any;
+            profilePicture: string | null;
+        }[];
+        scanStatus: string;
+        metadataStatus: string;
+        lastScanError: any;
+        lastMetaError: any;
         recognizedUserIds: number[];
-        hashtags: string[];
+        hashtags: any;
+        objectTags: any;
+        sceneTags: any;
+        ocrText: any;
         faces: {
-            index: number;
+            faceId: string;
             box: any;
-            manuallyTaggedUserId: any;
+            expandedBox: any;
+            personId: any;
+            personName: any;
+            similarity: any;
+            status: any;
+            confidence: any;
+            reason: any;
         }[];
         recognizedUsers: {
             id: any;
             name: any;
             profilePicture: string | null;
         }[];
-    }[] | {
-        gallery: {
-            id: number;
-            url: string | null | undefined;
-            uploadedAt: Date;
-            label: string | null | undefined;
-            isProfile: boolean;
-            userId: number | null | undefined;
-            recognizedUserIds: number[];
-            hashtags: string[];
-            faces: {
-                index: number;
-                box: any;
-                manuallyTaggedUserId: any;
-            }[];
-            recognizedUsers: {
-                id: any;
-                name: any;
-                profilePicture: string | null;
-            }[];
-        }[];
-        suggestions: {
-            faces: Array<{
-                box: any;
-                confidence: number;
-                isConfident: boolean;
-                topSuggestion: {
-                    id: number;
-                    name: string;
-                    confidence: number;
-                    distance: number;
-                } | null;
-                allSuggestions: Array<{
-                    id: number;
-                    name: string;
-                    confidence: number;
-                    distance: number;
-                }>;
-                label: string;
-                reason: string | null;
-            }>;
-            highConfidenceCount: number;
-            lowConfidenceCount: number;
-            itemId: number;
-            url: string;
-        };
+    }[]>;
+    forceScanItem(galleryItemId: number): Promise<{
+        message: string;
+        skipped: boolean;
+    } | {
+        message: string;
+        skipped?: undefined;
     }>;
-    /**
-     * Manually tag a user in a gallery photo.
-     * - Tag is permanent — never removed by AI refresh
-     * - If user has no profile picture yet, sets this photo as their first one
-     * - Clears item's face cache (forces fresh detection on next sync)
-     * - Invalidates in-memory model cache (model must be rebuilt with new training data)
-     * - Triggers background refresh to propagate recognition to other photos
-     */
+    identifyFacesInDetections(detections: any[], labeledDescriptors: LabeledFaceDescriptors[], faceDescs: any[], baseIds: number[]): Promise<{
+        aiIds: number[];
+        descriptors: {
+            descriptor: number[];
+            box: any;
+            rejectedUserIds: any;
+            manuallyTaggedUserId: any;
+            isIgnored: any;
+        }[];
+    }>;
     tagUnknownFace(galleryItemId: number, userId: number, faceIndex?: number): Promise<{
         message: string;
         profilePictureSet: boolean;
@@ -178,16 +461,6 @@ declare const galleryService: {
     untagFace(galleryItemId: number, userId: number, faceIndex?: number): Promise<{
         message: string;
     }>;
-    /**
-     * Re-scan all gallery photos and ADD newly recognized users to each photo.
-     *
-     * RULE: Existing tags (manual or previous AI) are NEVER removed.
-     *       AI can only ADD more users to a photo's tag list.
-     *
-     * @param forceRescan  Clear all cached face descriptors first so the improved
-     *                     detector re-processes every photo from scratch.
-     *                     Essential after detection logic changes.
-     */
     syncState: {
         isScanning: boolean;
         total: number;
@@ -195,6 +468,13 @@ declare const galleryService: {
     };
     refreshGalleryRecognition(forceRescan?: boolean): Promise<{
         message: string;
+        forceRescan?: undefined;
+        updatedCount?: undefined;
+        total?: undefined;
+        durationSc?: undefined;
+    } | {
+        message: string;
+        forceRescan: boolean;
         updatedCount?: undefined;
         total?: undefined;
         durationSc?: undefined;
@@ -203,19 +483,9 @@ declare const galleryService: {
         total: number;
         durationSc: string;
         message?: undefined;
+        forceRescan?: undefined;
     }>;
-    getUnknownFaceClusters(): Promise<{
-        clusterId: string;
-        faceCount: number;
-        anchorImage: string;
-        anchorBox: any;
-        relatedPhotos: {
-            itemId: any;
-            faceIndex: any;
-            url: string;
-            box: any;
-        }[];
-    }[]>;
+    getUnknownFaceClusters(): Promise<any[]>;
     getTagSuggestions(galleryItemId: number): Promise<{
         needsScanning: boolean;
         faces: Array<{
@@ -286,6 +556,122 @@ declare const galleryService: {
         message: string;
         resetCount: number;
     }>;
+    getAllHashtags(): Promise<string[]>;
+    getSearchSuggestions(query: string): Promise<any[]>;
+    backfillState: {
+        isRunning: boolean;
+        total: number;
+        processed: number;
+        failed: number;
+        currentImageId: number | null;
+        startedAt: Date | null;
+        finishedAt: Date | null;
+    };
+    backfillMissingMetadata(force?: boolean): Promise<{
+        isRunning: boolean;
+        total: number;
+        processed: number;
+        failed: number;
+        currentImageId: number | null;
+        startedAt: Date | null;
+        finishedAt: Date | null;
+        running: boolean;
+        message: string;
+    } | {
+        running: boolean;
+        message: string;
+        total: number;
+        processed: number;
+        failed: number;
+    }>;
+    getBackfillStatus(): {
+        running: boolean;
+        total: number;
+        processed: number;
+        failed: number;
+        remaining: number;
+        currentImageId: number | null;
+        startedAt: Date | null;
+        finishedAt: Date | null;
+    };
+    processGalleryImage(imageId: number, isForceScan?: boolean, isForceMeta?: boolean): Promise<{
+        id: number;
+        url: string | null | undefined;
+        thumbnailUrl: string | null | undefined;
+        uploadedAt: Date;
+        label: string | null | undefined;
+        isProfile: boolean;
+        userId: number | null | undefined;
+        metadata: {
+            description: any;
+            aiSummary: any;
+            scene: any;
+            detectedObjects: any;
+            hashtags: any;
+            ocrText: any;
+            peopleCount: any;
+            eventName: any;
+            location: any;
+            dominantColor: any;
+            aspectRatio: any;
+            customDetails: {
+                dominant_color: any;
+                aspect_ratio: any;
+                orientation: any;
+                generatedAt: any;
+                metadataVersion: any;
+            };
+            objects: any;
+            scenes: any;
+            caption: any;
+            person_count: any;
+            dominant_color: any;
+            aspect_ratio: any;
+            orientation: any;
+            customLocation: any;
+            customEvent: any;
+            lastScanError: any;
+            lastMetaError: any;
+        };
+        people: {
+            id: any;
+            name: any;
+            profilePicture: string | null;
+        }[];
+        scanStatus: string;
+        metadataStatus: string;
+        lastScanError: any;
+        lastMetaError: any;
+        recognizedUserIds: number[];
+        hashtags: any;
+        objectTags: any;
+        sceneTags: any;
+        ocrText: any;
+        faces: {
+            faceId: string;
+            box: any;
+            expandedBox: any;
+            personId: any;
+            personName: any;
+            similarity: any;
+            status: any;
+            confidence: any;
+            reason: any;
+        }[];
+        recognizedUsers: {
+            id: any;
+            name: any;
+            profilePicture: string | null;
+        }[];
+    }>;
+    processGalleryImageDirect(imageId: number, isForceScan?: boolean, isForceMeta?: boolean): Promise<void>;
+    generateMetadataForImage(imageId: number, forceRegenerateAI?: boolean): Promise<any>;
+    generateMetadata(imageId: number): Promise<any>;
+    scanAndRecognizeImage(imageId: number): Promise<void>;
+    syncWithFileSystem(): Promise<{
+        count: number;
+    }>;
+    initializeQueue(): Promise<void>;
 };
 export { galleryService, buildLabeledDescriptors };
 export default galleryService;

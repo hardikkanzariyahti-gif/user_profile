@@ -37,6 +37,12 @@ const userController = {
 
   async checkFrame(req: Request, res: Response) {
     if (!req.file) return res.status(400).json({ message: 'No frame' });
+    if (!req.file.buffer || req.file.buffer.length === 0) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid frame payload',
+      });
+    }
     
     try {
       // Proxy to Python Lite check
@@ -44,7 +50,8 @@ const userController = {
       const blob = new Blob([req.file.buffer], { type: req.file.mimetype });
       formData.append('file', blob, 'frame.jpg');
 
-      const pythonRes = await fetch('http://localhost:8000/check_frame', {
+      const angle = req.body.angle || req.query.angle || 'front';
+      const pythonRes = await fetch(`http://localhost:8000/check_frame?angle=${encodeURIComponent(angle)}`, {
         method: 'POST',
         body: formData
       });

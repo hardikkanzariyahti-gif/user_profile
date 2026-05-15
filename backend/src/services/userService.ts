@@ -26,14 +26,8 @@ const userService = {
     }
 
     const user = await userRepository.create(payload);
-    
-    // AI Improvement: Refresh Global Gallery recognition to catch any matches for this newly created user!
-    // Break circular dependency with local require
-    const { galleryService } = require('./galleryService');
-    galleryService.refreshGalleryRecognition().catch((err: any) => console.log('[Sync] Background refresh failed:', err));
-    
-    return toUserResponse(user);
 
+    return toUserResponse(user);
   },
 
   async listUsers() {
@@ -54,7 +48,7 @@ const userService = {
     const filePath = path.join(UPLOADS_DIR, file.filename);
     try {
       const descriptor = await faceAi.getFaceDescriptor(filePath);
-      return { 
+      return {
         isValid: !!descriptor,
         message: !!descriptor ? 'Clear face detected!' : 'Face is too blurry or not clear enough. Please ensure good lighting and look straight at the camera.'
       };
@@ -69,35 +63,58 @@ const userService = {
     const updates: any = validateUpdateUserInput(body);
 
     if (files && files.length > 0) {
-      // SOFT VALIDATION: We want to be helpful. As long as at least ONE photo has a face, we proceed.
-      // We filter out the photos that don't have faces so they don't pollute the recognition model.
-      const validFiles: any[] = [];
-      const failedLabels: string[] = [];
+      // ── PARALLEL VALIDATION ──────────────────────────────────────────────
+      const validationResults = await Promise.all(
+        files.map(async (file) => {
+          const filePath = path.join(UPLOADS_DIR, file.filename);
+          const data = await faceAi.detectFaces(filePath);
+          const faces = data.faces || [];
+          return { file, hasFace: faces.length > 0, faces, data };
+        })
+      );
 
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i];
-        const filePath = path.join(UPLOADS_DIR, file.filename);
-        const data = await faceAi.detectFaces(filePath);
-        
-        if (data.faces && data.faces.length > 0) {
-          validFiles.push(file);
-        } else {
-          const label = file.originalname.replace('.jpg', '');
-          failedLabels.push(label);
-          console.log(`[userService] Skipping "${label}" - no face detected.`);
-        }
+      const validFiles = validationResults.filter(r => r.hasFace).map(r => r.file);
+      const failedLabels = validationResults
+        .filter(r => !r.hasFace)
+        .map(r => r.file.originalname.replace('.jpg', ''));
+
+      if (failedLabels.length > 0) {
+        console.log(`[userService] Skipping angles with no face: ${failedLabels.join(', ')}`);
       }
 
       if (validFiles.length === 0) {
-        throw httpError(400, `No face detected in any of your photos. Please ensure your face is clearly visible in at least one image.`);
+        throw httpError(400, 'No face detected in any of your photos. Please ensure your face is clearly visible in at least one image.');
       }
 
-      // Update the 'files' variable to only contain valid ones for the rest of the function
       files = validFiles;
-      
-      // Update the update payload with only valid URLs
       updates.profile_picture = buildUploadUrl(files[0].filename);
-      updates.profile_pictures = files.map(f => buildUploadUrl(f.filename));
+      updates.profile_pictures = files.map((f: any) => buildUploadUrl(f.filename));
+
+      // Build profileDescriptors array containing embedding, crop, and qualityScore
+      const profileDescriptors: any[] = [];
+      validationResults.forEach(vr => {
+        if (vr.hasFace) {
+          const mainFace = vr.faces[0];
+          const desc = faceAi.serializeDescriptor(mainFace.descriptor);
+          
+          if (desc.length !== 512 && desc.length !== 128) {
+            console.warn(`[Profile Enrolment] Embedding length ${desc.length} is invalid for user ${userId}`);
+          }
+
+          // Profile Enrollment Debug log as requested:
+          console.log(`[Profile Debug] userId: ${userId}, face detected: yes, face count: ${vr.faces.length}, embedding length: ${desc.length}, crop size: ${mainFace.box._width}x${mainFace.box._height}, quality score: ${mainFace.confidence}`);
+
+          profileDescriptors.push({
+            descriptor: desc,
+            faceCrop: buildUploadUrl(vr.file.filename),
+            box: mainFace.box,
+            qualityScore: mainFace.confidence ?? 1.0,
+            addedAt: new Date().toISOString()
+          });
+        }
+      });
+
+      updates.profileDescriptor = profileDescriptors;
     }
 
     if (Object.keys(updates).length === 0) {
@@ -117,44 +134,30 @@ const userService = {
     try {
       updatedUser = await userRepository.updateById(userId, updates);
     } catch (err: any) {
-      if (err.code === 'P2025') {
-        throw httpError(404, 'User not found');
-      }
+      if (err.code === 'P2025') throw httpError(404, 'User not found');
       throw err;
     }
 
     if (files && files.length > 0) {
-      const urls = files.map(f => buildUploadUrl(f.filename));
-      
-      // Update User with all pictures
-      await userRepository.updateById(userId, { 
-        profile_picture: urls[0], // First one as main thumbnail
-        profile_pictures: urls    // All angles for recognition
-      });
+      const urls = (files as any[]).map((f: any) => buildUploadUrl(f.filename));
 
-      // Hide/De-list previous profile pictures to keep gallery clean
-      await galleryRepository.hideOldProfilePictures(userId);
+      await Promise.all([
+        galleryRepository.hideOldProfilePictures(userId),
+        ...(files as any[]).map((file: any) =>
+          galleryRepository.createOne({
+            url: buildUploadUrl(file.filename),
+            uploadedAt: new Date(),
+            isProfile: true,
+            userId: updatedUser.id,
+            recognizedUserIds: [updatedUser.id],
+          })
+        ),
+      ]);
 
-      // Also create individual gallery items for tracking/matching
-      // Only the FRONT face (first one) is visible in the main gallery
-      await Promise.all(files.map((file, index) => 
-        galleryRepository.createOne({
-          url: buildUploadUrl(file.filename),
-          uploadedAt: new Date(),
-          label: `${updatedUser.name}'s Profile Picture`,
-          isProfile: true,
-          showInGallery: index === 0, // Only show the first angle (Front)
-          userId: updatedUser.id,
-          recognizedUserIds: [updatedUser.id],
-        })
-      ));
-
-      // Clear cached profile descriptor so it re-calculates from the new multi-angle pictures
-      await userRepository.updateById(userId, { profileDescriptor: null });
-      
-      // Refresh gallery recognition in background with the new face data
       const { galleryService } = require('./galleryService');
-      galleryService.refreshGalleryRecognition().catch((err: any) => console.log('[Sync] Background refresh failed:', err));
+      galleryService.refreshGalleryRecognition().catch((err: any) =>
+        console.log('[Sync] Background refresh failed:', err)
+      );
     }
 
     return toUserResponse(updatedUser);

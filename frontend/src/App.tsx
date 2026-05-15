@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Link, useLocation } from 'react-router-dom';
 import { UserCircle, MapPin, AppWindow } from 'lucide-react';
+import { MiniSearchBar } from './components/MiniSearchBar';
 import UserList from './pages/UserList';
 import ProfileForm from './pages/ProfileForm';
 import Gallery from './pages/Gallery';
@@ -29,16 +30,13 @@ const Navigation: React.FC<NavigationProps> = ({ loggedInUser }) => {
   return (
     <nav className="nav-links">
       <Link to="/" className={`nav-link ${location.pathname === '/' ? 'active' : ''}`}>
-        Check Profiles
+        All Profiles
       </Link>
       <Link to="/gallery" className={`nav-link ${location.pathname === '/gallery' ? 'active' : ''}`}>
         Gallery
       </Link>
       <Link to="/people" className={`nav-link ${location.pathname === '/people' ? 'active' : ''}`}>
         People
-      </Link>
-      <Link to="/search" className={`nav-link ${location.pathname === '/search' || location.pathname.startsWith('/tags/') ? 'active' : ''}`}>
-        Search
       </Link>
       {loggedInUser && (
         <Link to="/albums" className={`nav-link ${location.pathname.startsWith('/albums') ? 'active' : ''}`}>
@@ -90,29 +88,27 @@ function App() {
     <BrowserRouter>
       <main className="app-container">
         <header className="header">
-          <Link to="/" style={{ textDecoration: 'none' }}>
-            <div className="logo">
-              <UserCircle size={32} />
-              <span>ProProfile</span>
-            </div>
-          </Link>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-            <Navigation loggedInUser={loggedInUser} />
-            <div style={{ marginLeft: '1rem', paddingLeft: '1rem', borderLeft: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-              {loggedInUser ? (
-                <>
-                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end' }}>
-                    <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--primary)' }}>{loggedInUser.name}</span>
-                    <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>Verified User</span>
-                  </div>
-                  <button onClick={handleLogout} className="btn btn-outline" style={{ padding: '0.4rem 0.8rem', fontSize: '0.8rem', borderRadius: '8px' }}>Logout</button>
-                </>
-              ) : (
-                <Link to="/login" className="btn btn-primary" style={{ padding: '0.4rem 1.2rem', fontSize: '0.9rem', borderRadius: '8px', textDecoration: 'none' }}>Login</Link>
-              )}
+          <div className="header-container">
+            <div className="nav-wrapper" style={{ flex: 1, display: 'flex', alignItems: 'center' }}>
+              <Navigation loggedInUser={loggedInUser} />
+              <MiniSearchBar />
+              <div className="auth-actions">
+                {loggedInUser ? (
+                  <>
+                    <div className="user-info">
+                      <span className="user-name-nav">{loggedInUser.name}</span>
+                      <span className="user-status-nav">Verified User</span>
+                    </div>
+                    <button onClick={handleLogout} className="btn btn-outline btn-sm">Logout</button>
+                  </>
+                ) : (
+                  <Link to="/login" className="btn btn-primary btn-sm login-btn">Login</Link>
+                )}
+              </div>
             </div>
           </div>
         </header>
+
 
         <Routes>
           <Route path="/" element={<UserList onLogin={handleLogin} loggedInUser={loggedInUser} />} />

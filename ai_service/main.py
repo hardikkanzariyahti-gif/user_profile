@@ -1,5 +1,4 @@
 import asyncio
-import contextlib
 import os
 from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI, File, UploadFile
@@ -8,203 +7,247 @@ from typing import List
 import uvicorn
 import cv2
 import numpy as np
-from deepface import DeepFace
+from insightface.app import FaceAnalysis
+from mtcnn import MTCNN
+import warnings
 
-app = FastAPI(title="Face AI Microservice (DeepFace)")
+from objectDetectionService import ObjectDetector
+from ocrService import OCRProcessor
+from sceneClassifier import SceneClassifier
 
-# Workers = 2 to avoid CPU thread thrashing. TensorFlow already uses multiple 
-# internal threads per image, so too many parallel workers makes it SLOWER on CPU.
+# Suppress InsightFace/Scikit-Image FutureWarnings
+warnings.filterwarnings("ignore", category=FutureWarning, module="insightface")
+
+app = FastAPI(title="Face AI Microservice (InsightFace)")
+
+# Workers = 2 to avoid CPU thread thrashing. 
 _executor = ThreadPoolExecutor(max_workers=2)
 
+# Global FaceAnalysis instance and state
+face_app = None
+mtcnn_detector = None
+object_detector = None
+ocr_processor = None
+scene_classifier = None
+current_det_size = (640, 640)
 
-# ─── Model warm-up ────────────────────────────────────────────────────────────
 @app.on_event("startup")
 def load_model():
-    print("Loading DeepFace Models... This may take a minute on first run to download.")
+    global face_app
+    print("Loading InsightFace Model (Buffalo_L)...")
+    # Buffalo_L is the high-accuracy model (ResNet100 + RetinaFace)
+    # providers: use CPU for reliability in most environments, or CUDA if available
+    providers = ['CPUExecutionProvider']
+    face_app = FaceAnalysis(name='buffalo_l', providers=providers)
+    
+    # Set a fixed ultra-high detection resolution (1280x1280) to find small faces in group photos with higher sensitivity (det_thresh=0.35)
+    face_app.prepare(ctx_id=0, det_size=(1280, 1280), det_thresh=0.35)
+    
+    global mtcnn_detector
+    print("Loading MTCNN as fallback...")
+    mtcnn_detector = MTCNN()
+
+    global object_detector, ocr_processor, scene_classifier
     try:
-        dummy_img = np.zeros((224, 224, 3), dtype=np.uint8)
-        DeepFace.represent(
-            dummy_img,
-            model_name='Facenet512',
-            detector_backend='mtcnn',
-            enforce_detection=False
-        )
-        print(f"DeepFace Loaded Successfully! (Facenet512 + MTCNN) — {_executor._max_workers} parallel workers ready")
+        object_detector = ObjectDetector()
+        ocr_processor = OCRProcessor()
+        scene_classifier = SceneClassifier()
     except Exception as e:
-        print("Model initialization error:", e)
+        print(f"Error loading metadata models: {e}")
+    
+    print(f"AI Models Loaded! — 1280x1280 InsightFace + MTCNN Fallback ready + Metadata Models ready")
 
-
-# ─── Health check ─────────────────────────────────────────────────────────────
 @app.get("/")
 def root():
     return {
         "status": "running",
-        "engine": "DeepFace (Facenet512 / MTCNN)",
+        "engine": "InsightFace (Buffalo_L)",
         "parallel_workers": _executor._max_workers,
     }
 
-
-# ─── Core extraction logic (runs in thread pool) ──────────────────────────────
 def _extract_faces_sync(img_bytes: bytes) -> dict:
-    """
-    CPU-bound face extraction — runs inside a thread-pool worker so multiple
-    images can be processed truly in parallel without blocking the event loop.
-    """
+    if face_app is None:
+        return {"error": "Model not loaded.", "faces": []}
+        
     nparr = np.frombuffer(img_bytes, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
     if img is None:
         return {"error": "Invalid image file format.", "faces": []}
 
-    last_error = None
-    original_h, original_w = img.shape[:2]
-    image_area = float(original_h * original_w)
+    h, w = img.shape[:2]
 
-    # Guard rails against tiny false positives (e.g. leaves/background patterns).
-    min_face_px = max(15, int(float(os.getenv("FACE_MIN_BOX_PX", "18"))))
-    min_face_area_ratio = float(os.getenv("FACE_MIN_AREA_RATIO", "0.0005"))
-    min_face_area_px = float(os.getenv("FACE_MIN_AREA_PX", "600"))
+    # Pre-processing: Apply CLAHE to improve contrast for better detection
+    try:
+        lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+        l, a, b = cv2.split(lab)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+        cl = clahe.apply(l)
+        limg = cv2.merge((cl,a,b))
+        enhanced_img = cv2.cvtColor(limg, cv2.COLOR_LAB2BGR)
+    except:
+        enhanced_img = img
 
-    def _passes_face_quality(face_area: dict) -> bool:
-        w = int(face_area.get("w", 0))
-        h = int(face_area.get("h", 0))
-        if w < min_face_px or h < min_face_px:
-            return False
-        area = float(w * h)
-        if area < min_face_area_px:
-            return False
-        if image_area > 0:
-            ratio = area / image_area
-            if ratio < min_face_area_ratio:
-                return False
-            # Prevent hallucinated faces that take up the entire image (allow up to 98% for close-ups)
-            if ratio > 0.98:
-                return False
-            # Reject faces with very abnormal aspect ratios (not a real face)
-            aspect = max(w, h) / max(1, min(w, h))
-            if aspect > 3.0:
-                return False
-        return True
+    # Multi-Pass Detection: Try different resolutions and enhancements to find small/snow faces
+    faces = []
+    # Pass 1: Try on original image (1280) - highly recommended for bright snow/outdoor scenes
+    faces = face_app.get(img)
 
-    def run_scan(source_img: np.ndarray, max_dim: int):
-        nonlocal last_error
-        local_img = source_img
-        h, w = local_img.shape[:2]
-        scale = 1.0
-        if h > max_dim or w > max_dim:
-            scale = max_dim / max(h, w)
-            local_img = cv2.resize(local_img, (int(w * scale), int(h * scale)))
+    # Pass 2: Try CLAHE enhanced image (1280) - great for shadow/indoor scenes
+    if not faces:
+        faces = face_app.get(enhanced_img)
+    
+    # Pass 3: Try smaller resolution (640)
+    if not faces:
+        face_app.prepare(ctx_id=0, det_size=(640, 640))
+        faces = face_app.get(img) or face_app.get(enhanced_img)
+        face_app.prepare(ctx_id=0, det_size=(1280, 1280))
 
-        try:
-            results = DeepFace.represent(
-                img_path=local_img,
-                model_name='Facenet512',
-                detector_backend='retinaface',
-                enforce_detection=True
-            )
+    # Pass 3: MTCNN Fallback (Stronger for low-res webcam/mobile quality)
+    if not faces and mtcnn_detector:
+        # print("[AI] No faces found with InsightFace, trying MTCNN fallback...")
+        rgb_img = cv2.cvtColor(enhanced_img, cv2.COLOR_BGR2RGB)
+        mt_results = mtcnn_detector.detect_faces(rgb_img)
+        
+        for res in mt_results:
+            if res['confidence'] < 0.8: continue
+            
+            x, y, w, h = res['box']
+            # Crop with generous margin to help InsightFace align
+            margin_w, margin_h = int(w * 0.3), int(h * 0.3)
+            x1_c, y1_c = max(0, x - margin_w), max(0, y - margin_h)
+            x2_c, y2_c = min(img.shape[1], x + w + margin_w), min(img.shape[0], y + h + margin_h)
+            face_crop = enhanced_img[y1_c:y2_c, x1_c:x2_c]
+            
+            if face_crop.size == 0: continue
+            
+            # Re-run InsightFace on this focused crop
+            crop_faces = face_app.get(face_crop)
+            if crop_faces:
+                for cf in crop_faces:
+                    # Translate coordinates back to original image
+                    cf.bbox[0] += x1_c
+                    cf.bbox[1] += y1_c
+                    cf.bbox[2] += x1_c
+                    cf.bbox[3] += y1_c
+                    faces.append(cf)
+                    break # Usually only one face in the crop
+            else:
+                # Last resort: use the MTCNN box if we really need it, but without descriptor
+                # (This won't help for recognition, but will prevent the "No face" error)
+                pass
 
-            if isinstance(results, dict):
-                results = [results]
+    # Laplacian variance for blur detection
+    def get_blur_score(face_img):
+        if face_img is None or face_img.size == 0:
+            return 0
+        gray = cv2.cvtColor(face_img, cv2.COLOR_BGR2GRAY)
+        return cv2.Laplacian(gray, cv2.CV_64F).var()
 
-            # RetinaFace confidence threshold — 0.50 catches almost everything without false positives
-            detection_threshold = 0.50
-            faces = []
-            for face in results:
-                conf = face.get('face_confidence', 0.99)
-                if conf < detection_threshold:
-                    continue
+    results = []
+    for face in faces:
+        bbox = face.bbox.astype(int)
+        x1, y1, x2, y2 = max(0, int(bbox[0])), max(0, int(bbox[1])), min(w, int(bbox[2])), min(h, int(bbox[3]))
+        
+        width = x2 - x1
+        height = y2 - y1
 
-                area = face['facial_area']
-                if not _passes_face_quality(area):
-                    continue
+        # Reduce noise filter to 10x10 for better sensitivity in large group photos
+        if (width < 10 or height < 10):
+            continue
 
-                # Scale bounding box coordinates back to original image size
-                if scale != 1.0:
-                    box = {
-                        "_x": int(area['x'] / scale),
-                        "_y": int(area['y'] / scale),
-                        "_width": int(area['w'] / scale),
-                        "_height": int(area['h'] / scale)
-                    }
-                else:
-                    box = {
-                        "_x": area['x'],
-                        "_y": area['y'],
-                        "_width": area['w'],
-                        "_height": area['h']
-                    }
+        face_roi = img[y1:y2, x1:x2]
+        blur_score = get_blur_score(face_roi)
+        
+        # Relaxed thresholds for standard validation
+        is_clear = bool(blur_score > 1.2) # Relaxed from 1.5
+        is_confident = bool(face.det_score > 0.12) # Relaxed from 0.15
+        
+        pose = face.pose.tolist() if hasattr(face, 'pose') else [0, 0, 0]
 
-                faces.append({
-                    "box": box,
-                    "confidence": conf,
-                    "descriptor": face['embedding']
-                })
+        # Expand bounding box by 30% for a better crop containing full forehead, ears, and chin
+        cx = (x1 + x2) // 2
+        cy = (y1 + y2) // 2
+        w_new = int(width * 1.30)
+        h_new = int(height * 1.30)
+        ex1 = max(0, cx - w_new // 2)
+        ey1 = max(0, cy - h_new // 2)
+        ex2 = min(w, cx + w_new // 2)
+        ey2 = min(h, cy + h_new // 2)
 
-            return {"faces": faces, "backend": "mtcnn"}
-        except ValueError as e:
-            last_error = e
-            return {"faces": []}
-        except Exception as e:
-            last_error = e
-            return {"faces": []}
+        landmarks = face.kps.tolist() if hasattr(face, 'kps') and face.kps is not None else []
 
-    # ── Multi-pass scanning strategy ──────────────────────────────────────────
-    # Pass 1: Standard scan at 1200px (good for most photos including groups)
-    first_pass = run_scan(img, max_dim=1200)
-    first_count = len(first_pass.get("faces", []))
+        print(f"[Face Analysis] Box: {width}x{height}, ExpandedBox: {ex2-ex1}x{ey2-ey1}, Conf: {face.det_score:.4f}, Blur: {blur_score:.2f}")
 
-    # Pass 2: For large/high-res images, try at higher resolution if we found 
-    # fewer faces than expected (group photos with small faces)
-    if max(original_h, original_w) > 1600:
-        # If we found very few faces in a large image, the faces might be too small
-        second_pass = run_scan(img, max_dim=1800)
-        second_count = len(second_pass.get("faces", []))
-        if second_count > first_count:
-            first_pass = second_pass
-            first_count = second_count
+        results.append({
+            "box": {"_x": x1, "_y": y1, "_width": width, "_height": height},
+            "expandedBox": {"_x": ex1, "_y": ey1, "_width": ex2 - ex1, "_height": ey2 - ey1},
+            "faceCropSize": {"width": width, "height": height},
+            "landmarks": landmarks,
+            "confidence": float(face.det_score),
+            "blur_score": float(blur_score),
+            "pose": pose,
+            "quality": {
+                "is_valid": is_clear and is_confident,
+                "reason": "Clear" if (is_clear and is_confident) else ("Too blurry" if not is_clear else "Face not clear")
+            },
+            "descriptor": face.normed_embedding.tolist()
+        })
 
-    # Pass 3: For very large images where we STILL have few faces, try full resolution
-    if first_count <= 2 and max(original_h, original_w) > 2000:
-        full_pass = run_scan(img, max_dim=2400)
-        full_count = len(full_pass.get("faces", []))
-        if full_count > first_count:
-            first_pass = full_pass
+    # Meta Analysis
+    person_count = len(results)
+    
+    # Dominant Color extraction (simple center-crop average)
+    try:
+        center_h, center_w = h // 2, w // 2
+        crop = img[max(0, center_h-50):min(h, center_h+50), max(0, center_w-50):min(w, center_w+50)]
+        avg_color_bgr = np.mean(crop, axis=(0, 1))
+        dominant_color = "#{:02x}{:02x}{:02x}".format(int(avg_color_bgr[2]), int(avg_color_bgr[1]), int(avg_color_bgr[0]))
+    except:
+        dominant_color = "#888888"
 
-    if first_pass.get("faces"):
-        return first_pass
+    print(f"[Image Analysis] Resized size: {w}x{meta_h if 'meta_h' in locals() else h}, Detected faces: {person_count}")
 
-    if last_error:
-        print("Face extraction fallback exhausted:", last_error)
-    return {"faces": []}
+    return {
+        "faces": results, 
+        "backend": "insightface",
+        "metadata": {
+            "person_count": person_count,
+            "dominant_color": dominant_color,
+            "aspect_ratio": round(w / h, 2),
+            "orientation": "landscape" if w > h else "portrait"
+        }
+    }
 
-
-# ─── Single image endpoint (original, kept for backwards compatibility) ────────
 @app.post("/extract_faces")
 async def extract_faces(file: UploadFile = File(...)):
     contents = await file.read()
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(_executor, _extract_faces_sync, contents)
-    if "error" in result and result["error"] != "Invalid image file format.":
-        return result
-    if "error" in result:
-        return JSONResponse(status_code=400, content=result)
     return result
 
+def _extract_metadata_sync(img_bytes: bytes) -> dict:
+    objects = object_detector.detect(img_bytes) if object_detector else []
+    texts = ocr_processor.extract_text(img_bytes) if ocr_processor else []
+    scenes = scene_classifier.classify(img_bytes) if scene_classifier else []
+    return {
+        "objects": objects,
+        "ocrText": texts,
+        "scenes": scenes
+    }
 
-# ─── BATCH endpoint — process multiple images in TRUE PARALLEL ────────────────
+@app.post("/extract_metadata")
+async def extract_metadata(file: UploadFile = File(...)):
+    contents = await file.read()
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(_executor, _extract_metadata_sync, contents)
+    return result
+
 @app.post("/extract_faces_batch")
 async def extract_faces_batch(files: List[UploadFile] = File(...)):
-    """
-    Process up to 10 images simultaneously.
-    Returns a list of results in the SAME ORDER as the uploaded files.
-    Each result: { "filename": str, "faces": [...] }
-    """
     loop = asyncio.get_event_loop()
-
-    # Read all file contents concurrently (I/O, not CPU — fine in async)
     contents_list = await asyncio.gather(*[f.read() for f in files])
-
-    # Submit all to thread pool — TRUE parallel CPU execution
+    
     futures = [
         loop.run_in_executor(_executor, _extract_faces_sync, contents)
         for contents in contents_list
@@ -215,11 +258,121 @@ async def extract_faces_batch(files: List[UploadFile] = File(...)):
         {
             "filename": files[i].filename,
             "faces": results[i].get("faces", []),
-            "backend": results[i].get("backend", None),
+            "backend": "insightface",
         }
         for i in range(len(files))
     ]
 
+@app.post("/check_frame")
+async def check_frame(file: UploadFile = File(...), angle: str = "front"):
+    """Lite check for live suggestions. Returns only quality/location info, no descriptors."""
+    contents = await file.read()
+    nparr = np.frombuffer(contents, np.uint8)
+    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    
+    if img is None:
+        return {"status": "error", "message": "Invalid frame"}
+    
+    h, w = img.shape[:2]
+
+    # Pre-processing: Apply CLAHE to improve contrast
+    try:
+        lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+        l, a, b = cv2.split(lab)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+        cl = clahe.apply(l)
+        limg = cv2.merge((cl,a,b))
+        enhanced_img = cv2.cvtColor(limg, cv2.COLOR_LAB2BGR)
+    except:
+        enhanced_img = img
+
+    faces = face_app.get(enhanced_img)
+
+    if not faces and mtcnn_detector:
+        # Fallback for live guidance too
+        rgb_img = cv2.cvtColor(enhanced_img, cv2.COLOR_BGR2RGB)
+        mt_results = mtcnn_detector.detect_faces(rgb_img)
+        if mt_results:
+            res = max(mt_results, key=lambda x: x['box'][2] * x['box'][3])
+            x, y, w_box, h_box = res['box']
+            # Fake face object for compatibility
+            class FakeFace:
+                def __init__(self, bbox, score):
+                    self.bbox = np.array([bbox[0], bbox[1], bbox[0]+bbox[2], bbox[1]+bbox[3]])
+                    self.det_score = score
+            faces = [FakeFace([x, y, w_box, h_box], res['confidence'])]
+
+    if not faces:
+        return {"status": "no_face", "message": "No face detected"}
+
+    # Use the largest face
+    face = max(faces, key=lambda f: (f.bbox[2]-f.bbox[0]) * (f.bbox[3]-f.bbox[1]))
+    bbox = face.bbox.astype(int)
+    
+    # Calculate centerness
+    face_center_x = (bbox[0] + bbox[2]) / 2
+    img_center_x = w / 2
+    off_center = abs(face_center_x - img_center_x) / w
+
+    # Calculate blur
+    face_roi = img[max(0, bbox[1]):min(h, bbox[3]), max(0, bbox[0]):min(w, bbox[2])]
+    if face_roi is None or face_roi.size == 0:
+        return {"status": "error", "message": "Invalid face crop"}
+    gray = cv2.cvtColor(face_roi, cv2.COLOR_BGR2GRAY)
+    blur_score = cv2.Laplacian(gray, cv2.CV_64F).var()
+
+    # Pose detection for automatic enrollment
+    # pose is [pitch, yaw, roll]
+    pose = face.pose.tolist() if hasattr(face, 'pose') else [0, 0, 0]
+    pitch, yaw, roll = pose
+
+    status = "ok"
+    msg = "Perfect! Ready to capture"
+    
+    # Relaxed thresholds for "simple validation"
+    if blur_score < 1.8:
+        status = "blurry"
+        msg = "Image is blurry, hold still..."
+    elif off_center > 0.45:
+        status = "not_centered"
+        msg = "Center your face."
+    elif (bbox[2]-bbox[0]) < w * 0.1:
+        status = "too_far"
+        msg = "Move closer."
+    elif face.det_score < 0.2:
+        status = "low_conf"
+        msg = "Face not clear."
+    else:
+        # Multi-angle Pose validation (pitch, yaw, roll)
+        # Yaw: looking left is positive (> 15), looking right is negative (< -15)
+        if angle == "front":
+            if abs(yaw) > 18:
+                status = "wrong_angle"
+                msg = "Look straight at the camera."
+            elif abs(pitch) > 18:
+                status = "wrong_angle"
+                msg = "Look straight at the camera."
+        elif angle == "left":
+            if yaw < 12:
+                status = "wrong_angle"
+                msg = "Turn your head to the LEFT."
+        elif angle == "right":
+            if yaw > -12:
+                status = "wrong_angle"
+                msg = "Turn your head to the RIGHT."
+
+    return {
+        "status": status,
+        "message": msg,
+        "face_present": True,
+        "score": float(face.det_score),
+        "blur": float(blur_score),
+        "pose": {
+            "pitch": float(pitch),
+            "yaw": float(yaw),
+            "roll": float(roll)
+        }
+    }
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

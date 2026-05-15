@@ -69,20 +69,21 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
   };
 
   return (
-    <div className="max-w-md mx-auto" style={{ maxWidth: '450px', margin: '4rem auto' }}>
-      <div className="card">
-        <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
+    <div style={{ maxWidth: '400px', margin: '6vh auto', padding: '0 1.5rem' }}>
+      <div className="card" style={{ padding: '2.5rem' }}>
+        <div style={{ textAlign: 'center', marginBottom: '2.5rem' }}>
           <div style={{
             display: 'inline-flex',
-            background: 'rgba(99, 102, 241, 0.1)',
-            padding: '1rem',
+            background: 'rgba(99, 102, 241, 0.08)',
+            padding: '1.25rem',
             borderRadius: '50%',
             marginBottom: '1rem',
+            color: 'var(--primary)'
           }}>
-            <LogIn size={32} className="text-primary" />
+            <LogIn size={32} />
           </div>
-          <h2 style={{ fontSize: '1.75rem', fontWeight: 800 }}>Welcome Back</h2>
-          <p className="text-muted">Access your personalized AI gallery</p>
+          <h2 style={{ fontSize: '1.85rem', fontWeight: 800, letterSpacing: '-0.02em', color: 'var(--text-main)', margin: '0 0 0.3rem' }}>Welcome Back</h2>
+          <p className="text-muted" style={{ fontSize: '0.9rem', color: 'var(--text-muted)', opacity: 0.8 }}>Access your personalized AI gallery</p>
         </div>
 
         {showCamera ? (
@@ -99,28 +100,28 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
               <div className="form-group">
                 <label>Email Address</label>
                 <div style={{ position: 'relative' }}>
-                  <Mail size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                  <Mail size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', opacity: 0.6 }} />
                   <input
                     type="email"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     placeholder="name@company.com"
-                    style={{ paddingLeft: '3rem' }}
+                    style={{ paddingLeft: '2.75rem' }}
                     required
                   />
                 </div>
               </div>
 
-              <div className="form-group">
+              <div className="form-group" style={{ marginBottom: '2rem' }}>
                 <label>Password</label>
                 <div style={{ position: 'relative' }}>
-                  <Lock size={18} style={{ position: 'absolute', left: '1rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                  <Lock size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', opacity: 0.6 }} />
                   <input
                     type="password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="••••••••"
-                    style={{ paddingLeft: '3rem' }}
+                    style={{ paddingLeft: '2.75rem' }}
                     required
                   />
                 </div>
@@ -128,15 +129,13 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
 
               <button
                 type="submit"
-                className="btn btn-primary w-full"
+                className="btn btn-primary btn-lg"
                 disabled={loading}
-                style={{ width: '100%', marginBottom: '1rem' }}
+                style={{ width: '100%' }}
               >
                 {loading ? <span className="loading-spinner"></span> : 'Login to Profile'}
               </button>
             </form>
-
-
           </>
         )}
       </div>

@@ -38,16 +38,26 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
+const compression_1 = __importDefault(require("compression"));
 const path = __importStar(require("path"));
 const routes_1 = __importDefault(require("./routes"));
 const constants_1 = require("./config/constants");
 const notFound_1 = __importDefault(require("./middlewares/notFound"));
 const errorHandler_1 = __importDefault(require("./middlewares/errorHandler"));
 const app = (0, express_1.default)();
+// ─── Performance Middleware ───────────────────────────────────────────────────
+// Gzip compress all responses — cuts payload sizes by 60–80%.
+app.use((0, compression_1.default)({ level: 6, threshold: 1024 }));
 app.use((0, cors_1.default)());
-app.use(express_1.default.json());
-app.use('/uploads', express_1.default.static(path.join(__dirname, '../uploads')));
-app.get('/', (req, res) => {
+// Increase limit only for API JSON (profile descriptors can be large).
+app.use(express_1.default.json({ limit: '2mb' }));
+// Static uploads with aggressive client-side caching (1 day).
+app.use('/uploads', express_1.default.static(path.join(__dirname, '../uploads'), {
+    maxAge: '1d',
+    etag: true,
+    lastModified: true,
+}));
+app.get('/', (_req, res) => {
     res.send(`Backend API is running at ${constants_1.APP_BASE_URL}`);
 });
 app.use('/api', routes_1.default);

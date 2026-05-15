@@ -3,9 +3,7 @@ import prisma from '../config/prisma';
 interface GalleryItemData {
   url: string;
   uploadedAt: Date;
-  label?: string;
   isProfile?: boolean;
-  showInGallery?: boolean;
   userId?: number | null;
   recognizedUserIds: number[];
   faceDescriptors?: any;
@@ -13,6 +11,38 @@ interface GalleryItemData {
 
 
 const galleryRepository = {
+  findAllLight() {
+    return prisma.galleryItem.findMany({
+      select: {
+        id: true,
+        url: true,
+        uploadedAt: true,
+        isProfile: true,
+        userId: true,
+        recognizedUserIds: true,
+        scanStatus: true,
+        metadataStatus: true,
+        hashtags: {
+          select: { name: true }
+        },
+        metadata: {
+          select: {
+            personCount: true,
+            dominantColor: true,
+            aspectRatio: true,
+            orientation: true,
+            rawJson: true,
+            objects: true,
+            scenes: true,
+            ocrText: true,
+          }
+        }
+        // faceDescriptors SKIPPED for list performance
+      },
+      orderBy: { uploadedAt: 'desc' },
+    });
+  },
+
   findAll() {
     return prisma.galleryItem.findMany({
       include: {
@@ -33,12 +63,34 @@ const galleryRepository = {
     });
   },
 
-  findByHashtag(tag: string) {
-    return prisma.galleryItem.findMany({
+  async findByHashtag(tag: string) {
+    const normalized = tag.toLowerCase().replace(/_/g, ' ');
+
+    // 1. Fetch items that match the hashtag name
+    const items = await prisma.galleryItem.findMany({
       where: {
-        hashtags: {
-          some: { name: tag }
-        }
+        OR: [
+          {
+            hashtags: {
+              some: {
+                name: {
+                  equals: tag,
+                  mode: 'insensitive'
+                }
+              }
+            }
+          },
+          {
+            hashtags: {
+              some: {
+                name: {
+                  equals: normalized,
+                  mode: 'insensitive'
+                }
+              }
+            }
+          }
+        ]
       },
       include: {
         hashtags: true,
@@ -46,10 +98,44 @@ const galleryRepository = {
       },
       orderBy: { uploadedAt: 'desc' },
     });
+
+    if (items.length > 0) return items;
+
+    // 2. Fallback: search JSON fields (objects, scenes, ocrText) across all items
+    const allItems = await prisma.galleryItem.findMany({
+      include: {
+        hashtags: true,
+        metadata: true,
+      },
+      orderBy: { uploadedAt: 'desc' },
+    });
+
+    return allItems.filter((item: any) => {
+      const meta = item.metadata;
+      if (!meta) return false;
+
+      // Check OCR
+      const ocrMatch = (meta.ocrText || []).some((text: string) =>
+        text.toLowerCase().includes(normalized) || text.toLowerCase().includes(tag)
+      );
+      if (ocrMatch) return true;
+
+      // Check Objects
+      const objMatch = (meta.objects || []).some((obj: any) =>
+        obj.name?.toLowerCase() === normalized || obj.name?.toLowerCase() === tag
+      );
+      if (objMatch) return true;
+
+      // Check Scenes
+      const sceneMatch = (meta.scenes || []).some((scene: any) =>
+        scene.label?.toLowerCase() === normalized || scene.label?.toLowerCase() === tag
+      );
+      return sceneMatch;
+    });
   },
 
   async updateById(id: number, data: any) {
-    const { hashtags, metadata, ...rest } = data;
+    const { hashtags, metadata, objects, scenes, ocrText, ...rest } = data;
     const updateData: any = { ...rest };
 
     if (Array.isArray(hashtags)) {
@@ -63,22 +149,36 @@ const galleryRepository = {
     }
 
     if (metadata) {
+      const generatedTime = metadata.metadataGeneratedAt ? new Date(metadata.metadataGeneratedAt) : new Date();
+      const metadataFields = {
+        personCount: metadata.person_count || 0,
+        dominantColor: metadata.dominant_color,
+        aspectRatio: metadata.aspect_ratio,
+        orientation: metadata.orientation,
+        rawJson: metadata,
+        objects: objects || [],
+        scenes: scenes || [],
+        ocrText: ocrText || [],
+
+        // Additive Columns mapping (Requirement 1)
+        description: metadata.description || metadata.caption || null,
+        aiSummary: metadata.aiSummary || metadata.caption || null,
+        scene: scenes || [],
+        detectedObjects: objects || [],
+        hashtags: hashtags || [],
+        ocrTextJson: ocrText || [],
+        peopleCount: metadata.person_count || 0,
+        eventName: metadata.eventName || metadata.customEvent || null,
+        location: metadata.location || metadata.customLocation || null,
+        generatedAt: generatedTime,
+        metadataVersion: 1,
+        lastMetaError: metadata.lastMetaError || null,
+      };
+
       updateData.metadata = {
         upsert: {
-          create: {
-            personCount: metadata.person_count || 0,
-            dominantColor: metadata.dominant_color,
-            aspectRatio: metadata.aspect_ratio,
-            orientation: metadata.orientation,
-            rawJson: metadata,
-          },
-          update: {
-            personCount: metadata.person_count || 0,
-            dominantColor: metadata.dominant_color,
-            aspectRatio: metadata.aspect_ratio,
-            orientation: metadata.orientation,
-            rawJson: metadata,
-          },
+          create: metadataFields,
+          update: metadataFields,
         },
       };
     }
@@ -100,7 +200,10 @@ const galleryRepository = {
   },
 
   createOne(data: any) {
-    const { hashtags, metadata, ...rest } = data;
+    const { hashtags, metadata, label, showInGallery, objects, scenes, ocrText, ...rest } = data;
+    // Schema guard: ignore legacy fields that are no longer in Prisma model.
+    void label;
+    void showInGallery;
     const createData: any = { ...rest };
 
     if (Array.isArray(hashtags)) {
@@ -113,6 +216,7 @@ const galleryRepository = {
     }
 
     if (metadata) {
+      const generatedTime = metadata.metadataGeneratedAt ? new Date(metadata.metadataGeneratedAt) : new Date();
       createData.metadata = {
         create: {
           personCount: metadata.person_count || 0,
@@ -120,6 +224,23 @@ const galleryRepository = {
           aspectRatio: metadata.aspect_ratio,
           orientation: metadata.orientation,
           rawJson: metadata,
+          objects: objects || [],
+          scenes: scenes || [],
+          ocrText: ocrText || [],
+
+          // Additive Columns (Requirement 1)
+          description: metadata.description || metadata.caption || null,
+          aiSummary: metadata.aiSummary || metadata.caption || null,
+          scene: scenes || [],
+          detectedObjects: objects || [],
+          hashtags: hashtags || [],
+          ocrTextJson: ocrText || [],
+          peopleCount: metadata.person_count || 0,
+          eventName: metadata.eventName || metadata.customEvent || null,
+          location: metadata.location || metadata.customLocation || null,
+          generatedAt: generatedTime,
+          metadataVersion: 1,
+          lastMetaError: metadata.lastMetaError || null,
         },
       };
     }

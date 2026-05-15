@@ -10,18 +10,18 @@ declare const albumService: {
             url: string;
             id: number;
             uploadedAt: Date;
-            label: string | null;
-            isProfile: boolean;
             userId: number | null;
+            isProfile: boolean;
             recognizedUserIds: number[];
-            hashtags: string[];
             faceDescriptors: import("@prisma/client/runtime/library").JsonValue | null;
+            scanStatus: string | null;
+            metadataStatus: string | null;
         }[];
     } & {
         id: number;
         userId: number;
-        title: string;
         description: string | null;
+        title: string;
         isGlobal: boolean;
         shareId: string;
         createdAt: Date;
@@ -34,18 +34,18 @@ declare const albumService: {
             url: string;
             id: number;
             uploadedAt: Date;
-            label: string | null;
-            isProfile: boolean;
             userId: number | null;
+            isProfile: boolean;
             recognizedUserIds: number[];
-            hashtags: string[];
             faceDescriptors: import("@prisma/client/runtime/library").JsonValue | null;
+            scanStatus: string | null;
+            metadataStatus: string | null;
         }[];
     } & {
         id: number;
         userId: number;
-        title: string;
         description: string | null;
+        title: string;
         isGlobal: boolean;
         shareId: string;
         createdAt: Date;
@@ -59,18 +59,18 @@ declare const albumService: {
             url: string;
             id: number;
             uploadedAt: Date;
-            label: string | null;
-            isProfile: boolean;
             userId: number | null;
+            isProfile: boolean;
             recognizedUserIds: number[];
-            hashtags: string[];
             faceDescriptors: import("@prisma/client/runtime/library").JsonValue | null;
+            scanStatus: string | null;
+            metadataStatus: string | null;
         }[];
     } & {
         id: number;
         userId: number;
-        title: string;
         description: string | null;
+        title: string;
         isGlobal: boolean;
         shareId: string;
         createdAt: Date;
@@ -83,18 +83,18 @@ declare const albumService: {
             url: string;
             id: number;
             uploadedAt: Date;
-            label: string | null;
-            isProfile: boolean;
             userId: number | null;
+            isProfile: boolean;
             recognizedUserIds: number[];
-            hashtags: string[];
             faceDescriptors: import("@prisma/client/runtime/library").JsonValue | null;
+            scanStatus: string | null;
+            metadataStatus: string | null;
         }[];
     } & {
         id: number;
         userId: number;
-        title: string;
         description: string | null;
+        title: string;
         isGlobal: boolean;
         shareId: string;
         createdAt: Date;
@@ -102,8 +102,8 @@ declare const albumService: {
     deleteAlbum(id: number, userId: number): Promise<{
         id: number;
         userId: number;
-        title: string;
         description: string | null;
+        title: string;
         isGlobal: boolean;
         shareId: string;
         createdAt: Date;
@@ -117,18 +117,18 @@ declare const albumService: {
             url: string;
             id: number;
             uploadedAt: Date;
-            label: string | null;
-            isProfile: boolean;
             userId: number | null;
+            isProfile: boolean;
             recognizedUserIds: number[];
-            hashtags: string[];
             faceDescriptors: import("@prisma/client/runtime/library").JsonValue | null;
+            scanStatus: string | null;
+            metadataStatus: string | null;
         }[];
     } & {
         id: number;
         userId: number;
-        title: string;
         description: string | null;
+        title: string;
         isGlobal: boolean;
         shareId: string;
         createdAt: Date;

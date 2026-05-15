@@ -13,10 +13,10 @@ declare const faceService: {
             profilePicture: string | null;
             "profile picture": string | null;
             confidence: number;
-            matchDistance: number;
-            secondBestDistance: number | null;
-            ambiguityMargin: number | null;
-            matchReason: "matched" | "threshold" | "ambiguous" | "no_candidates";
+            matchDistance: any;
+            secondBestDistance: any;
+            ambiguityMargin: any;
+            matchReason: any;
         }[];
         unknownCount: number;
     }>;

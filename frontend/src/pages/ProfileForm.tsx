@@ -19,7 +19,7 @@ const ProfileForm: React.FC<ProfileFormProps> = ({ mode = 'create' }) => {
     password: '',
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
-  
+
   const [enrollment, setEnrollment] = useState<Record<string, { file: File | null; preview: string | null }>>({
     front: { file: null, preview: null },
     left: { file: null, preview: null },
@@ -40,19 +40,23 @@ const ProfileForm: React.FC<ProfileFormProps> = ({ mode = 'create' }) => {
         .then((data: any) => {
           setFormData({ name: data.name, email: data.email, password: '' });
           const profilePic = data.profilePicture || data['profile picture'] || null;
+          const profilePics = Array.isArray(data.profilePictures)
+            ? data.profilePictures
+            : (Array.isArray(data['profile pictures']) ? data['profile pictures'] : []);
           if (profilePic) {
             setEnrollment(prev => ({
               ...prev,
               front: { file: null, preview: profilePic }
             }));
           }
-          // If the backend returns multiple profile pictures in the future, we could load them here
-          if (Array.isArray(data.profilePictures) && data.profilePictures.length > 0) {
-             setEnrollment({
-               front: { file: null, preview: data.profilePictures[0] || profilePic },
-               left: { file: null, preview: data.profilePictures[1] || null },
-               right: { file: null, preview: data.profilePictures[2] || null },
-             });
+          if (profilePics.length > 0) {
+            setEnrollment({
+              front: { file: null, preview: profilePics[0] || profilePic },
+              left: { file: null, preview: profilePics[1] || null },
+              right: { file: null, preview: profilePics[2] || null },
+              upper: { file: null, preview: profilePics[3] || null },
+              lower: { file: null, preview: profilePics[4] || null },
+            });
           }
         })
         .catch((err) => {
@@ -105,10 +109,10 @@ const ProfileForm: React.FC<ProfileFormProps> = ({ mode = 'create' }) => {
 
   const handleCameraCapture = async (capturedFile: File, dataUrl: string) => {
     if (!activeAngle) return;
-    
+
     // Simplification: We trust the CameraCapture's "OK" status which now uses relaxed thresholds.
     // This makes the process much faster as we don't do a double round-trip for quality verification.
-    
+
     setEnrollment(prev => ({
       ...prev,
       [activeAngle!]: { file: capturedFile, preview: dataUrl }
@@ -177,7 +181,7 @@ const ProfileForm: React.FC<ProfileFormProps> = ({ mode = 'create' }) => {
       setTimeout(() => navigate('/'), 1200);
     } catch (err: any) {
       setMessage({ type: 'error', text: err.message });
-      
+
       // Parse error message to identify failed angles and highlight them
       const failed = angles
         .filter(a => err.message.includes(a.label))
@@ -258,17 +262,17 @@ const ProfileForm: React.FC<ProfileFormProps> = ({ mode = 'create' }) => {
 
           <div className="form-group" style={{ marginTop: '1.5rem' }}>
             <label>Face Enrollment (Multi-Angle)</label>
-            
+
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '0.75rem', marginTop: '1rem' }}>
               {angles.map((angle) => (
-                <div key={angle.id} style={{ 
-                  display: 'flex', 
-                  flexDirection: 'column', 
-                  alignItems: 'center', 
+                <div key={angle.id} style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
                   gap: '0.75rem',
                   padding: '1rem',
-                  border: failedAngles.includes(angle.id) 
-                    ? '2px solid var(--error)' 
+                  border: failedAngles.includes(angle.id)
+                    ? '2px solid var(--error)'
                     : (activeAngle === angle.id ? '2px solid var(--primary)' : '1px solid var(--border)'),
                   borderRadius: '12px',
                   backgroundColor: failedAngles.includes(angle.id)
@@ -284,7 +288,7 @@ const ProfileForm: React.FC<ProfileFormProps> = ({ mode = 'create' }) => {
                       </div>
                     )}
                   </div>
-                  
+
                   <div style={{ textAlign: 'center' }}>
                     <div style={{ fontWeight: 600, fontSize: '0.85rem' }}>{angle.label}</div>
                     <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{angle.description}</div>
@@ -316,20 +320,20 @@ const ProfileForm: React.FC<ProfileFormProps> = ({ mode = 'create' }) => {
           </div>
 
           {activeAngle && (
-            <div className="modal-overlay" style={{ 
-              position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, 
-              backgroundColor: 'rgba(0,0,0,0.8)', display: 'flex', 
-              alignItems: 'center', justifyContent: 'center', zIndex: 1000 
+            <div className="modal-overlay" style={{
+              position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+              backgroundColor: 'rgba(0,0,0,0.8)', display: 'flex',
+              alignItems: 'center', justifyContent: 'center', zIndex: 1000
             }}>
               <div className="card" style={{ maxWidth: '600px', width: '90%' }}>
                 <h3 className="card-title">Capture {angles.find(a => a.id === activeAngle)?.label}</h3>
                 <p style={{ marginBottom: '1rem', color: 'var(--text-muted)' }}>
                   {angles.find(a => a.id === activeAngle)?.description}
                 </p>
-                <div style={{ 
-                  backgroundColor: 'rgba(59, 130, 246, 0.1)', 
-                  padding: '0.75rem', 
-                  borderRadius: '8px', 
+                <div style={{
+                  backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                  padding: '0.75rem',
+                  borderRadius: '8px',
                   marginBottom: '1.5rem',
                   border: '1px solid rgba(59, 130, 246, 0.2)',
                   display: 'flex',
@@ -348,10 +352,10 @@ const ProfileForm: React.FC<ProfileFormProps> = ({ mode = 'create' }) => {
                 />
 
                 {verifying && (
-                  <div style={{ 
-                    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, 
+                  <div style={{
+                    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
                     backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: '12px',
-                    display: 'flex', flexDirection: 'column', alignItems: 'center', 
+                    display: 'flex', flexDirection: 'column', alignItems: 'center',
                     justifyContent: 'center', zIndex: 10, color: 'white'
                   }}>
                     <div className="loading-spinner" style={{ marginBottom: '1rem', width: '40px', height: '40px', borderWidth: '4px' }}></div>
@@ -365,21 +369,21 @@ const ProfileForm: React.FC<ProfileFormProps> = ({ mode = 'create' }) => {
 
           <button
             type="submit"
-            className="btn btn-primary w-full"
-            style={{ width: '100%', marginTop: '2rem', padding: '1rem' }}
+            className="btn btn-primary btn-lg"
+            style={{ width: '100%', marginTop: '2rem' }}
             disabled={loading || !!activeAngle}
           >
             {loading ? (
               <span className="loading-spinner"></span>
             ) : (
-              <><Save size={20} /> {mode === 'create' ? 'Enroll & Create Profile' : 'Save AI Model'}</>
+              <><Save size={18} /> {mode === 'create' ? 'Enroll & Create Profile' : 'Save AI Model'}</>
             )}
           </button>
         </form>
       </div>
 
       {message && (
-        <div className="message-toast" style={{ 
+        <div className="message-toast" style={{
           backgroundColor: message.type === 'error' ? 'var(--error)' : 'var(--success)',
           zIndex: 2000
         }}>

@@ -1,7 +1,13 @@
 fastapi
 uvicorn
 python-multipart
-deepface
-tf-keras
+insightface
+onnxruntime
 opencv-python-headless
 numpy
+ultralytics
+easyocr
+transformers
+torch
+torchvision
+Pillow

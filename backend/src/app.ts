@@ -1,5 +1,6 @@
 import Express from 'express';
 import cors from 'cors';
+import compression from 'compression';
 import * as path from 'path';
 import apiRoutes from './routes';
 import { APP_BASE_URL } from './config/constants';
@@ -8,11 +9,25 @@ import errorHandler from './middlewares/errorHandler';
 
 const app = Express();
 
-app.use(cors());
-app.use(Express.json());
-app.use('/uploads', Express.static(path.join(__dirname, '../uploads')));
+// ─── Performance Middleware ───────────────────────────────────────────────────
+// Gzip compress all responses — cuts payload sizes by 60–80%.
+app.use(compression({ level: 6, threshold: 1024 }));
 
-app.get('/', (req, res) => {
+app.use(cors());
+// Increase limit only for API JSON (profile descriptors can be large).
+app.use(Express.json({ limit: '2mb' }));
+
+// Static uploads with aggressive client-side caching (1 day).
+app.use(
+  '/uploads',
+  Express.static(path.join(__dirname, '../uploads'), {
+    maxAge: '1d',
+    etag: true,
+    lastModified: true,
+  })
+);
+
+app.get('/', (_req, res) => {
   res.send(`Backend API is running at ${APP_BASE_URL}`);
 });
 

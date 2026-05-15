@@ -39,6 +39,42 @@ const AlbumDetail: React.FC<AlbumDetailProps> = ({ loggedInUser }) => {
 
   const loggedInUserId = loggedInUser ? Number(loggedInUser.id) : null;
 
+  // 📅 [Hierarchical Chronology] - Same optimized grouping logic from Main Gallery
+  const groupedItems = React.useMemo(() => {
+    if (!album || !album.items) return [];
+    
+    const today = new Date();
+    const todayStr = today.toLocaleDateString();
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yesterdayStr = yesterday.toLocaleDateString();
+    
+    const groups: Record<string, { title: string; time: number; items: any[] }> = {};
+    
+    album.items.forEach((img: any) => {
+      const ts = img.uploadedAt || img.createdAt || 0;
+      const d = ts ? new Date(ts) : new Date();
+      
+      const key = d.toISOString().split('T')[0];
+      const localStr = d.toLocaleDateString();
+      
+      if (!groups[key]) {
+        let title = d.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+        if (localStr === todayStr) title = 'Today';
+        else if (localStr === yesterdayStr) title = 'Yesterday';
+        else if (d.getFullYear() === today.getFullYear()) {
+          title = d.toLocaleDateString(undefined, { weekday: 'short', month: 'long', day: 'numeric' });
+        } else {
+          title = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+        }
+        groups[key] = { title, time: d.getTime(), items: [] };
+      }
+      groups[key].items.push(img);
+    });
+
+    return Object.values(groups).sort((a, b) => b.time - a.time);
+  }, [album]);
+
   useEffect(() => {
     if (id && loggedInUserId) {
       loadAlbum(Number(id), loggedInUserId);
@@ -162,188 +198,253 @@ const AlbumDetail: React.FC<AlbumDetailProps> = ({ loggedInUser }) => {
   const coverImage = album.items && album.items.length > 0 ? album.items[0].url : null;
 
   return (
-    <div style={{ minHeight: '100vh', paddingBottom: '5rem' }}>
-      {/* Hero Section */}
-      <div style={{ position: 'relative', height: '60vh', width: '100vw', marginLeft: 'calc(-50vw + 50%)', marginTop: '-2rem', overflow: 'hidden' }}>
-        {coverImage ? (
-          <motion.img 
-            initial={{ scale: 1.1, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1 }}
-            transition={{ duration: 1 }}
-            src={coverImage} 
-            alt="Hero cover" 
-            style={{ width: '100%', height: '100%', objectFit: 'cover', filter: 'brightness(0.6)' }} 
-          />
-        ) : (
-          <div style={{ width: '100%', height: '100%', background: 'linear-gradient(135deg, #1e1e2f 0%, #111 100%)' }} />
-        )}
-        
-        <div style={{ 
-          position: 'absolute', bottom: 0, left: 0, right: 0, padding: '4rem 5%', 
-          background: 'linear-gradient(to top, rgba(0,0,0,0.9) 0%, transparent 100%)',
-          display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: '2rem', flexWrap: 'wrap'
-        }}>
-          <div style={{ flex: 1, minWidth: '300px' }}>
-            <Link to="/albums" className="nav-link" style={{ 
-              display: 'flex', alignItems: 'center', gap: '0.5rem', width: 'max-content', 
-              marginBottom: '1.5rem', background: 'rgba(255,255,255,0.1)', padding: '0.5rem 1rem', 
-              borderRadius: '999px', backdropFilter: 'blur(10px)', color: 'white', textDecoration: 'none',
-              fontSize: '0.9rem', fontWeight: 600
-            }}>
-              <ChevronLeft size={18} /> Back to My Albums
-            </Link>
-            
-            {isEditing ? (
-              <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} style={{ maxWidth: '600px' }}>
-                <input 
-                  type="text" value={editForm.title} 
-                  onChange={e => setEditForm({ ...editForm, title: e.target.value })}
-                  style={{ 
-                    width: '100%', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', 
-                    color: 'white', padding: '1rem', borderRadius: '12px', fontSize: '2.5rem', fontWeight: 800,
-                    outline: 'none', marginBottom: '1rem', backdropFilter: 'blur(10px)'
-                  }}
-                  autoFocus
-                />
-                <textarea 
-                  value={editForm.description} 
-                  onChange={e => setEditForm({ ...editForm, description: e.target.value })}
-                  placeholder="Tell the story of this album..."
-                  style={{ 
-                    width: '100%', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', 
-                    color: 'white', padding: '1rem', borderRadius: '12px', fontSize: '1.1rem',
-                    minHeight: '100px', backdropFilter: 'blur(10px)', outline: 'none'
-                  }}
-                />
-              </motion.div>
-            ) : (
-              <div>
-                <motion.h1 
-                  layoutId="album-title"
-                  className="gallery-title" 
-                  style={{ marginBottom: '1rem', fontSize: '4rem', fontWeight: 900, letterSpacing: '-0.02em', color: 'white' }}
-                >
-                  {album.title}
-                </motion.h1>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '2rem', color: 'rgba(255,255,255,0.8)', fontSize: '1rem', fontWeight: 500 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}><Calendar size={18} /> {new Date(album.createdAt).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' })}</div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}><ImageIcon size={18} /> {album.items.length} {album.items.length === 1 ? 'Memorable Photo' : 'Shared Moments'}</div>
-                  {album.user && <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}><div style={{ width: '24px', height: '24px', borderRadius: '50%', background: 'var(--primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.7rem' }}>{album.user.name?.[0]}</div> By {album.user.name}</div>}
-                </div>
-                {album.description && <p style={{ marginTop: '1.5rem', color: 'rgba(255,255,255,0.7)', maxWidth: '700px', fontSize: '1.1rem', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{album.description}</p>}
-              </div>
-            )}
-          </div>
-          
-          <div style={{ display: 'flex', gap: '1rem' }}>
-            {isEditing ? (
-              <>
-                <button onClick={() => handleEditSubmit()} disabled={saving} className="btn btn-primary" style={{ padding: '0.8rem 2rem', borderRadius: '12px', display: 'flex', alignItems: 'center', gap: '0.5rem', boxShadow: '0 10px 20px rgba(99, 102, 241, 0.4)' }}>
-                  <Save size={20} /> {saving ? 'Saving...' : 'Save Design'}
-                </button>
-                <button onClick={() => { setIsEditing(false); setIsRemovingMode(false); setItemIdsToRemove([]); }} className="btn btn-outline" style={{ padding: '0.8rem 2rem', borderRadius: '12px', background: 'rgba(255,255,255,0.1)', color: 'white', border: '1px solid rgba(255,255,255,0.1)' }}>Cancel</button>
-              </>
-            ) : (
-              album.userId === loggedInUserId && (
-                <>
-                  <button onClick={() => setIsEditing(true)} className="btn btn-primary" style={{ padding: '0.8rem 1.5rem', borderRadius: '12px', display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'white', color: '#111', fontWeight: 700 }}>
-                    <Edit2 size={20} /> Customize
-                  </button>
-                  <div style={{ position: 'relative' }}>
-                    <button onClick={handleShare} className="btn btn-outline" style={{ padding: '0.8rem 1.2rem', borderRadius: '12px', background: 'rgba(255,255,255,0.1)', color: 'white', border: '1px solid rgba(255,255,255,0.1)' }}>
-                      <Share2 size={20} />
-                    </button>
-                  </div>
-                  <button onClick={handleDelete} className="btn btn-outline-danger" style={{ padding: '0.8rem 1.2rem', borderRadius: '12px', background: 'rgba(255, 68, 68, 0.1)', color: '#ff4444', border: '1px solid rgba(255, 68, 68, 0.2)' }}>
-                    <Trash2 size={20} />
-                  </button>
-                </>
-              )
-            )}
-          </div>
-        </div>
-      </div>
+    <div style={{ 
+      maxWidth: '1400px', 
+      margin: '0 auto', 
+      padding: '2rem 1.5rem 5rem',
+      minHeight: '100vh',
+      boxSizing: 'border-box'
+    }}>
+      {/* 🏛️ Modern Compact Header Array */}
+      <div style={{
+        background: 'linear-gradient(to right, #1a1a2e, #16213e)',
+        borderRadius: '24px',
+        padding: '2.5rem',
+        marginBottom: '3rem',
+        position: 'relative',
+        overflow: 'hidden',
+        boxShadow: '0 20px 40px rgba(0,0,0,0.15)',
+        display: 'flex',
+        gap: '2.5rem',
+        flexWrap: 'wrap',
+        alignItems: 'center',
+        border: '1px solid rgba(255,255,255,0.05)'
+      }}>
+        {/* Glass Effect Blur Backdrop */}
+        <div style={{
+          position: 'absolute', inset: 0,
+          background: coverImage ? `url(${coverImage}) center/cover no-repeat` : 'none',
+          filter: 'blur(30px) saturate(1.5) brightness(0.4)',
+          opacity: coverImage ? 0.3 : 0,
+          zIndex: 0
+        }} />
 
-      <div className="gallery-container" style={{ paddingTop: '3rem' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2.5rem' }}>
-          <div>
-            <h2 style={{ fontSize: '1.8rem', fontWeight: 800, marginBottom: '0.5rem' }}>Collection</h2>
-            <p className="text-muted">A curated look into {album.title}</p>
-          </div>
-          
-          {isEditing && (
-            <div style={{ display: 'flex', gap: '1rem' }}>
-              <button 
-                onClick={openAddPhotosModal} 
-                className="btn btn-outline" 
-                style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', borderStyle: 'dashed', borderColor: 'var(--primary)', color: 'var(--primary)' }}
-              >
-                <Plus size={18} /> Add Photos
-              </button>
-              <button 
-                onClick={() => setIsRemovingMode(!isRemovingMode)} 
-                className={`btn ${isRemovingMode ? 'btn-danger' : 'btn-outline-danger'}`}
-                style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
-              >
-                {isRemovingMode ? 'Cancel Removal' : 'Remove Photos'}
-              </button>
+        {/* Floating Card Cover Image */}
+        <motion.div 
+          initial={{ opacity: 0, scale: 0.9 }} 
+          animate={{ opacity: 1, scale: 1 }}
+          style={{ 
+            width: '160px', height: '160px', borderRadius: '16px', overflow: 'hidden', 
+            boxShadow: '0 15px 30px rgba(0,0,0,0.3)', zIndex: 1, position: 'relative',
+            background: '#1e293b', flexShrink: 0, border: '3px solid rgba(255,255,255,0.1)'
+          }}>
+          {coverImage ? (
+            <img src={coverImage} alt="Cover" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+          ) : (
+            <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <ImageIcon size={40} style={{ opacity: 0.3, color: 'white' }} />
             </div>
+          )}
+        </motion.div>
+
+        {/* Text & Stats Details Column */}
+        <div style={{ flex: 1, zIndex: 1, minWidth: '280px' }}>
+          <Link to="/albums" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: 'var(--primary)', textDecoration: 'none', fontSize: '0.85rem', fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', marginBottom: '0.75rem' }}>
+            <ChevronLeft size={16} /> Back to Collection
+          </Link>
+
+          {isEditing ? (
+            <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
+              <input 
+                type="text" value={editForm.title} 
+                onChange={e => setEditForm({ ...editForm, title: e.target.value })}
+                style={{ 
+                  width: '100%', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', 
+                  color: 'white', padding: '0.75rem', borderRadius: '10px', fontSize: '1.75rem', fontWeight: 800,
+                  outline: 'none', marginBottom: '0.75rem'
+                }}
+                autoFocus
+              />
+              <textarea 
+                value={editForm.description} 
+                onChange={e => setEditForm({ ...editForm, description: e.target.value })}
+                placeholder="Describe these memories..."
+                style={{ 
+                  width: '100%', background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)', 
+                  color: 'white', padding: '0.75rem', borderRadius: '10px', fontSize: '0.95rem',
+                  minHeight: '60px', resize: 'none', outline: 'none'
+                }}
+              />
+            </motion.div>
+          ) : (
+            <>
+              <h1 style={{ fontSize: '2.5rem', fontWeight: 800, color: 'white', letterSpacing: '-0.02em', margin: '0 0 0.5rem' }}>{album.title}</h1>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1.5rem', alignItems: 'center', color: 'rgba(255,255,255,0.7)', fontSize: '0.9rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Calendar size={16} /> {new Date(album.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600, color: 'white' }}><ImageIcon size={16} /> {album.items.length} photos</div>
+                {album.user && <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <div style={{ width: '20px', height: '20px', borderRadius: '50%', background: 'var(--primary)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.65rem', fontWeight: 700 }}>{album.user.name?.[0]}</div>
+                  By {album.user.name}
+                </div>}
+              </div>
+              {album.description && <p style={{ marginTop: '1rem', color: 'rgba(255,255,255,0.6)', fontSize: '0.95rem', maxWidth: '600px', lineHeight: 1.5 }}>{album.description}</p>}
+            </>
           )}
         </div>
 
-        {album.items.length === 0 ? (
-          <div style={{ padding: '5rem', textAlign: 'center', background: 'rgba(255,255,255,0.02)', borderRadius: '24px', border: '2px dashed rgba(255,255,255,0.05)' }}>
-            <ImageIcon size={48} style={{ opacity: 0.1, marginBottom: '1rem' }} />
-            <h3 style={{ opacity: 0.5 }}>Empty Collection</h3>
-            {isEditing && <p className="text-muted">Start by adding some photos to this album.</p>}
-          </div>
-        ) : (
-          <div className="gallery-grid" style={{ gap: '1.5rem', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))' }}>
-            <AnimatePresence>
-              {album.items.map((item: any) => (
-                <motion.div
-                  key={item.id}
-                  layout
-                  initial={{ opacity: 0, scale: 0.9 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0, scale: 0.9 }}
-                  whileHover={isRemovingMode ? {} : { y: -10, transition: { duration: 0.3 } }}
-                  className="gallery-card"
-                  style={{ 
-                    position: 'relative', cursor: isRemovingMode ? 'pointer' : 'pointer', 
-                    borderRadius: '20px', overflow: 'hidden', height: '350px',
-                    border: itemIdsToRemove.includes(item.id) ? '4px solid #ff4444' : 'none',
-                    opacity: itemIdsToRemove.includes(item.id) ? 0.6 : 1
-                  }}
-                  onClick={() => isRemovingMode ? toggleRemoval(item.id) : setSelectedImage(item)}
-                >
-                  <img src={item.url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                  
-                  {isRemovingMode && (
-                    <div style={{ 
-                      position: 'absolute', top: '1rem', right: '1rem', 
-                      background: itemIdsToRemove.includes(item.id) ? '#ff4444' : 'rgba(0,0,0,0.5)', 
-                      borderRadius: '50%', color: 'white', padding: '5px', zIndex: 10
-                    }}>
-                      <X size={20} />
-                    </div>
-                  )}
+        {/* Action Buttons Pod */}
+        <div style={{ display: 'flex', gap: '0.75rem', zIndex: 1, alignSelf: 'flex-start' }}>
+          {isEditing ? (
+            <>
+              <button onClick={() => handleEditSubmit()} disabled={saving} className="btn btn-primary" style={{ padding: '0.6rem 1.25rem', borderRadius: '10px', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.9rem' }}>
+                <Save size={16} /> {saving ? 'Saving...' : 'Save'}
+              </button>
+              <button onClick={() => { setIsEditing(false); setIsRemovingMode(false); setItemIdsToRemove([]); }} className="btn" style={{ padding: '0.6rem 1.25rem', borderRadius: '10px', background: 'rgba(255,255,255,0.1)', color: 'white', border: 'none', fontSize: '0.9rem' }}>Cancel</button>
+            </>
+          ) : (
+            album.userId === loggedInUserId && (
+              <>
+                <button onClick={() => setIsEditing(true)} style={{ background: 'white', color: '#0f172a', padding: '0.6rem 1.25rem', borderRadius: '10px', border: 'none', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', fontSize: '0.9rem' }}>
+                  <Edit2 size={16} /> Edit
+                </button>
+                <button onClick={handleShare} style={{ background: 'rgba(255,255,255,0.1)', color: 'white', padding: '0.6rem', borderRadius: '10px', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center' }}>
+                  <Share2 size={18} />
+                </button>
+                <button onClick={handleDelete} style={{ background: 'rgba(239,68,68,0.15)', color: '#ef4444', padding: '0.6rem', borderRadius: '10px', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center' }}>
+                  <Trash2 size={18} />
+                </button>
+              </>
+            )
+          )}
+        </div>
+      </div>
 
-                  {!isRemovingMode && !isEditing && (
-                    <div style={{ 
-                      position: 'absolute', bottom: 0, left: 0, right: 0, padding: '1.5rem',
-                      background: 'linear-gradient(to top, rgba(0,0,0,0.8), transparent)',
-                      display: 'flex', justifyContent: 'flex-end', alignItems: 'flex-end', opacity: 0,
-                    }} className="card-hover-overlay">
-                       <Plus size={20} color="white" />
-                    </div>
-                  )}
-                </motion.div>
-              ))}
-            </AnimatePresence>
+      {/* 🛠️ Toolbar & Controls */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
+        <h2 style={{ fontSize: '1.25rem', fontWeight: 800, margin: 0, letterSpacing: '-0.01em' }}>Moments Collected</h2>
+        
+        {isEditing && (
+          <div style={{ display: 'flex', gap: '0.75rem' }}>
+            <button 
+              onClick={openAddPhotosModal} 
+              style={{ background: 'rgba(99, 102, 241, 0.1)', color: 'var(--primary)', padding: '0.5rem 1rem', borderRadius: '8px', border: '1px dashed var(--primary)', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem' }}
+            >
+              <Plus size={16} /> Add Photos
+            </button>
+            <button 
+              onClick={() => setIsRemovingMode(!isRemovingMode)} 
+              style={{ background: isRemovingMode ? '#ef4444' : 'transparent', color: isRemovingMode ? 'white' : '#ef4444', padding: '0.5rem 1rem', borderRadius: '8px', border: '1px solid #ef4444', fontWeight: 600, cursor: 'pointer', fontSize: '0.85rem' }}
+            >
+              {isRemovingMode ? 'Exit Removal' : 'Select to Remove'}
+            </button>
           </div>
         )}
       </div>
+
+      {/* 📸 Main Organized Photos Stack */}
+      {album.items.length === 0 ? (
+        <div style={{ padding: '5rem 2rem', textAlign: 'center', background: 'var(--bg-card)', borderRadius: '16px', border: '2px dashed var(--border-color)' }}>
+          <ImageIcon size={48} style={{ opacity: 0.2, marginBottom: '1rem' }} />
+          <h3 style={{ margin: '0 0 0.5rem 0' }}>No memories in this album yet</h3>
+          {isEditing ? (
+            <p className="text-muted">Click "Add Photos" in toolbar above to fill your collection.</p>
+          ) : (
+            <p className="text-muted">Owner hasn't shared moments here yet.</p>
+          )}
+        </div>
+      ) : (
+        <div className="google-photos-flow">
+          <AnimatePresence>
+            {groupedItems.map((group) => (
+              <div key={group.title} className="date-bucket" style={{ marginBottom: '3rem' }}>
+                {/* Persistent Date Anchor */}
+                <div style={{
+                  position: 'sticky',
+                  top: '10px', 
+                  zIndex: 20,
+                  padding: '0.5rem 0',
+                  background: 'rgba(var(--bg-main-rgb), 0.8)',
+                  backdropFilter: 'blur(10px)',
+                  marginBottom: '1rem'
+                }}>
+                  <h3 style={{ fontSize: '0.9rem', fontWeight: 700, opacity: 0.8, display: 'flex', alignItems: 'center', gap: '8px', margin: 0 }}>
+                    {group.title}
+                    <span style={{ fontWeight: 400, fontSize: '0.75rem', opacity: 0.5, background: 'rgba(0,0,0,0.05)', padding: '1px 6px', borderRadius: '10px' }}>
+                      {group.items.length}
+                    </span>
+                  </h3>
+                </div>
+
+                {/* Optimized Dense Grid Array */}
+                <div className="grid-layer" style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))',
+                  gap: '0.75rem'
+                }}>
+                  {group.items.map((item: any) => (
+                    <motion.div
+                      key={item.id}
+                      layout
+                      initial={{ opacity: 0, scale: 0.96 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      whileHover={{ scale: 1.02, transition: { duration: 0.2 } }}
+                      style={{ 
+                        position: 'relative', 
+                        borderRadius: '12px', 
+                        overflow: 'hidden', 
+                        aspectRatio: '1 / 1', 
+                        cursor: 'pointer',
+                        boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
+                        border: itemIdsToRemove.includes(item.id) ? '3px solid #ef4444' : 'none',
+                        background: '#f1f5f9'
+                      }}
+                      onClick={() => isRemovingMode ? toggleRemoval(item.id) : setSelectedImage(item)}
+                    >
+                      <img 
+                        src={item.thumbnailUrl || item.url} 
+                        alt="" 
+                        loading="lazy"
+                        style={{ 
+                          width: '100%', height: '100%', objectFit: 'cover',
+                          opacity: itemIdsToRemove.includes(item.id) ? 0.4 : 1,
+                          transition: 'opacity 0.2s'
+                        }} 
+                      />
+
+                      {/* Removal Selection Logic */}
+                      {isRemovingMode && (
+                        <div style={{ 
+                          position: 'absolute', top: '8px', right: '8px', 
+                          background: itemIdsToRemove.includes(item.id) ? '#ef4444' : 'rgba(0,0,0,0.4)', 
+                          borderRadius: '50%', color: 'white', width: '24px', height: '24px', 
+                          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10,
+                          backdropFilter: 'blur(4px)', border: '1px solid rgba(255,255,255,0.2)'
+                        }}>
+                          {itemIdsToRemove.includes(item.id) ? <CheckCircle2 size={16} /> : <X size={14} />}
+                        </div>
+                      )}
+
+                      {/* Smooth Interactive Overlayer */}
+                      {!isRemovingMode && (
+                        <div className="hover-layer" style={{
+                          position: 'absolute', inset: 0,
+                          background: 'rgba(0,0,0,0.3)',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          opacity: 0, transition: 'opacity 0.2s', zIndex: 5
+                        }}>
+                          <div style={{ background: 'white', borderRadius: '20px', padding: '6px 12px', color: 'black', fontSize: '0.7rem', fontWeight: 700, boxShadow: '0 4px 10px rgba(0,0,0,0.2)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                             <ImageIcon size={12} /> View
+                          </div>
+                        </div>
+                      )}
+                    </motion.div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </AnimatePresence>
+        </div>
+      )}
 
       {/* Photo Selection Modal */}
       <AnimatePresence>
@@ -481,28 +582,14 @@ const AlbumDetail: React.FC<AlbumDetailProps> = ({ loggedInUser }) => {
           {message.text}
         </motion.div>
       )}
-      
+
+      {/* Global CSS Extensions */}
       <style>{`
-        .nav-link:hover {
-          background: rgba(255,255,255,0.2) !important;
-          transform: translateY(-2px);
-        }
-        .gallery-card:hover .card-hover-overlay {
+        .grid-layer > div:hover .hover-layer {
           opacity: 1 !important;
         }
-        .custom-scrollbar::-webkit-scrollbar {
-          width: 8px;
-        }
-        .custom-scrollbar::-webkit-scrollbar-track {
-          background: transparent;
-        }
-        .custom-scrollbar::-webkit-scrollbar-thumb {
-          background: rgba(255,255,255,0.1);
-          border-radius: 10px;
-        }
-        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-          background: rgba(255,255,255,0.2);
-        }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 10px; }
       `}</style>
     </div>
   );

@@ -1,10 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Combine, X, Eye, EyeOff, UserPlus, Trash2, ShieldAlert } from 'lucide-react';
+import { Combine, X, Eye, EyeOff, UserPlus, Trash2, ShieldAlert, Search, ChevronLeft, Calendar, Image as ImageIcon, Filter, Info } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 import { API_BASE_URL } from '../services/apiClient';
 import FaceCrop from '../components/FaceCrop';
-import { fetchGalleryItem, setProfilePictureFromGalleryItem } from '../services/galleryService';
+import { fetchGallery, fetchGalleryItem, setProfilePictureFromGalleryItem } from '../services/galleryService';
 
 const API_BASE = `${API_BASE_URL}/api`;
 
@@ -19,9 +19,16 @@ interface FaceCluster {
 export default function People() {
   const [clusters, setClusters] = useState<FaceCluster[]>([]);
   const [users, setUsers] = useState<any[]>([]);
+  const [allGalleryItems, setAllGalleryItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
+  
+  // 🔎 Modern Filtering & Searching
+  const [searchTerm, setSearchTerm] = useState('');
+  const [modalSearchTerm, setModalSearchTerm] = useState('');
+  const [sortBy, setSortBy] = useState<'name' | 'count'>('count');
 
+  // 🧘🏽 Logic State
   const [selectedCluster, setSelectedCluster] = useState<FaceCluster | null>(null);
   const [merging, setMerging] = useState(false);
   const [ignoring, setIgnoring] = useState(false);
@@ -29,6 +36,11 @@ export default function People() {
   const [photoDetailsById, setPhotoDetailsById] = useState<Record<number, any>>({});
   const [showAllFaces, setShowAllFaces] = useState(false);
   const [activeMenuFace, setActiveMenuFace] = useState<{ itemId: number; faceIndex: number } | null>(null);
+
+  // 🕵🏾 Details Modal State
+  const [selectedPerson, setSelectedPerson] = useState<any | null>(null);
+  const [personPhotos, setPersonPhotos] = useState<any[]>([]);
+  const [loadingPersonPhotos, setLoadingPersonPhotos] = useState(false);
 
   const [preview, setPreview] = useState<{
     open: boolean;
@@ -39,6 +51,148 @@ export default function People() {
     error: string | null;
   }>({ open: false, itemId: null, boxes: [], item: null, loading: false, error: null });
   const [previewNaturalSize, setPreviewNaturalSize] = useState<{ w: number; h: number } | null>(null);
+
+  // ── FETCH & HYDRATE ───────────────────────────────────────────
+  
+  const fetchData = async (silent = false) => {
+    try {
+      if (!silent) setLoading(true);
+      const [clustersRes, usersRes, galleryData] = await Promise.all([
+        fetch(`${API_BASE}/gallery/clusters`),
+        fetch(`${API_BASE}/users`),
+        fetchGallery().catch(() => [])
+      ]);
+
+      const clustersJson = await clustersRes.json().catch(() => null);
+      const usersJson = await usersRes.json().catch(() => null);
+
+      const newUsers = Array.isArray(usersJson) ? usersJson : [];
+      setClusters(Array.isArray(clustersJson) ? clustersJson : []);
+      setUsers(newUsers);
+      setAllGalleryItems(Array.isArray(galleryData) ? galleryData : []);
+      
+      return { 
+        clusters: Array.isArray(clustersJson) ? clustersJson : [], 
+        users: newUsers 
+      };
+    } catch (err) {
+      setMessage({ type: 'error', text: 'Failed to load people data.' });
+      return { clusters: [], users: [] };
+    } finally {
+      if (!silent) setLoading(false);
+    }
+  };
+
+  useEffect(() => { fetchData(); }, []);
+
+  // Automatically attach photo count from aggregated gallery items to users
+  const enrichedUsers = useMemo(() => {
+    return users.map(u => {
+      // Count occurrences where current user is in recognizedUserIds
+      const count = allGalleryItems.filter(item => 
+        (item.recognizedUserIds || []).map(Number).includes(Number(u.id))
+      ).length;
+      return { ...u, photoCount: count };
+    });
+  }, [users, allGalleryItems]);
+
+  // Filtering/Sorting Pipeline
+  const filteredAndSortedUsers = useMemo(() => {
+    let list = enrichedUsers.filter(u => 
+      u.name.toLowerCase().includes(searchTerm.toLowerCase())
+    );
+
+    if (sortBy === 'name') {
+      list = list.sort((a, b) => a.name.localeCompare(b.name));
+    } else {
+      list = list.sort((a, b) => b.photoCount - a.photoCount);
+    }
+    
+    return list;
+  }, [enrichedUsers, searchTerm, sortBy]);
+
+  // 🔎 Identity Assignment Modal Filters
+  const filteredModalUsers = useMemo(() => {
+    const q = modalSearchTerm.toLowerCase().trim();
+    if (!q) return users;
+    return users.filter(u => u.name.toLowerCase().includes(q));
+  }, [users, modalSearchTerm]);
+
+  // 📅 Chronological Grouping for selected person
+  const groupedPersonPhotos = useMemo(() => {
+    if (!personPhotos.length) return [];
+    
+    const today = new Date();
+    const todayStr = today.toLocaleDateString();
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yesterdayStr = yesterday.toLocaleDateString();
+    
+    const groups: Record<string, { title: string; time: number; items: any[] }> = {};
+    
+    personPhotos.forEach((img) => {
+      const rawTs = img.uploadedAt || img.createdAt || img.capturedAt || null;
+      
+      let d: Date;
+      let isUnknown = false;
+      
+      if (!rawTs) {
+        isUnknown = true;
+      } else {
+        const tempDate = new Date(rawTs);
+        if (isNaN(tempDate.getTime()) || tempDate.getTime() === 0) {
+          isUnknown = true;
+        } else {
+          d = tempDate;
+        }
+      }
+      
+      if (isUnknown) {
+        const key = 'unknown';
+        if (!groups[key]) {
+          groups[key] = { title: 'Unknown Date', time: -9999999999999, items: [] };
+        }
+        groups[key].items.push(img);
+        return;
+      }
+      
+      // Key format: YYYY-MM-DD
+      const key = d!.toISOString().split('T')[0];
+      const localStr = d!.toLocaleDateString();
+      
+      if (!groups[key]) {
+        let title = d!.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+        if (localStr === todayStr) title = 'Today';
+        else if (localStr === yesterdayStr) title = 'Yesterday';
+        else if (d!.getFullYear() === today.getFullYear()) {
+          title = d!.toLocaleDateString(undefined, { weekday: 'short', month: 'long', day: 'numeric' });
+        } else {
+          title = d!.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+        }
+        groups[key] = { title, time: d!.getTime(), items: [] };
+      }
+      groups[key].items.push(img);
+    });
+
+    return Object.values(groups).sort((a, b) => b.time - a.time);
+  }, [personPhotos]);
+
+  // Load photos for detailed modal
+  const handleOpenPersonDetail = async (user: any) => {
+    setSelectedPerson(user);
+    setLoadingPersonPhotos(true);
+    setPersonPhotos([]); // clear previous
+    try {
+      const res = await fetchGallery(Number(user.id));
+      setPersonPhotos(Array.isArray(res) ? res : []);
+    } catch (err) {
+      setMessage({ type: 'error', text: 'Failed to load tagging data.' });
+    } finally {
+      setLoadingPersonPhotos(false);
+    }
+  };
+
+  // ── BUSINESS LOGIC PRESERVATION ───────────────────────────────
 
   const maybeOfferProfilePictureFallback = async (userId: number, galleryItemId: number, freshUsers?: any[]) => {
     const userList = freshUsers || users;
@@ -53,70 +207,10 @@ export default function People() {
     try {
       const result = await setProfilePictureFromGalleryItem(galleryItemId, userId);
       setMessage({ type: 'success', text: result.message || 'Profile picture set successfully.' });
-      await fetchData();
+      await fetchData(true);
     } catch (err: any) {
       setMessage({ type: 'error', text: err.message || 'Failed to set profile picture.' });
     }
-  };
-
-  const fetchData = async (silent = false) => {
-    try {
-      if (!silent) setLoading(true);
-      const [clustersRes, usersRes] = await Promise.all([
-        fetch(`${API_BASE}/gallery/clusters`),
-        fetch(`${API_BASE}/users`)
-      ]);
-      const clustersJson = await clustersRes.json().catch(() => null);
-      const usersJson = await usersRes.json().catch(() => null);
-      if (!clustersRes.ok) throw new Error(clustersJson?.error || 'Failed to load unknown people clusters.');
-      if (!usersRes.ok) throw new Error(usersJson?.error || 'Failed to load users.');
-
-      const newUsers = Array.isArray(usersJson) ? usersJson : [];
-      setClusters(Array.isArray(clustersJson) ? clustersJson : []);
-      setUsers(newUsers);
-      return { clusters: Array.isArray(clustersJson) ? clustersJson : [], users: newUsers };
-    } catch (err) {
-      setMessage({ type: 'error', text: 'Failed to load people data.' });
-      return { clusters: [], users: [] };
-    } finally {
-      if (!silent) setLoading(false);
-    }
-  };
-
-  useEffect(() => { fetchData(); }, []);
-
-  useEffect(() => {
-    if (!selectedCluster) {
-      setSelectedFaces([]);
-      setShowAllFaces(false);
-      return;
-    }
-    // DEFAULT: Only select the primary (anchor) face to prevent accidental bulk-ignoring of the whole cluster
-    setSelectedFaces([{ itemId: selectedCluster.relatedPhotos[0].itemId, faceIndex: selectedCluster.relatedPhotos[0].faceIndex }]);
-  }, [selectedCluster]);
-
-  useEffect(() => {
-    if (!selectedCluster) return;
-
-    const uniqueItemIds = Array.from(new Set(selectedCluster.relatedPhotos.map(p => p.itemId)));
-    const itemIdsToFetch = uniqueItemIds.slice(0, 24).filter((id) => !photoDetailsById[id]);
-
-    if (itemIdsToFetch.length === 0) return;
-
-    itemIdsToFetch.forEach(async (id) => {
-      try {
-        const data = await fetchGalleryItem(id);
-        setPhotoDetailsById(prev => ({ ...prev, [id]: data }));
-      } catch { }
-    });
-  }, [selectedCluster]);
-
-  const toggleFace = (face: { itemId: number; faceIndex: number }) => {
-    setSelectedFaces(prev => {
-      const exists = prev.some(f => f.itemId === face.itemId && f.faceIndex === face.faceIndex);
-      if (exists) return prev.filter(f => !(f.itemId === face.itemId && f.faceIndex === face.faceIndex));
-      return [...prev, face];
-    });
   };
 
   const handleMerge = async (userId: number) => {
@@ -129,7 +223,6 @@ export default function People() {
     const facesToTag = [...selectedFaces];
     const firstItemId = facesToTag[0].itemId;
 
-    // AUTO CLOSE INSTANTLY FOR FAST UX AND REMOVE CLUSTER OPTIMISTICALLY
     const currentClusterId = selectedCluster.clusterId;
     setSelectedCluster(null);
     setClusters(prev => prev.filter(c => c.clusterId !== currentClusterId));
@@ -143,60 +236,12 @@ export default function People() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
 
-      setMessage({ type: 'success', text: `Success! Tagged ${facesToTag.length} photos. AI is syncing the rest...` });
-
-      // Trigger silent background AI sync without blocking
+      setMessage({ type: 'success', text: `Success! Tagged ${facesToTag.length} photos. Syncing...` });
       fetch(`${API_BASE}/gallery/refresh`, { method: 'POST' });
-
-      // Refresh data silently to show changes without blocking UI
       const freshData = await fetchData(true);
-
-      // Don't await the confirm dialog to avoid blocking
       maybeOfferProfilePictureFallback(userId, firstItemId, freshData.users);
     } catch (err: any) {
       setMessage({ type: 'error', text: err.message || 'Merge failed.' });
-    } finally {
-      setMerging(false);
-    }
-  };
-
-  const handleMergeOne = async (userId: number, face: { itemId: number; faceIndex: number }) => {
-    setMerging(true);
-
-    // Auto-remove the photo from the current cluster INSTANTLY
-    setClusters(prev => {
-      const newClusters = prev.map(c => {
-        if (c.clusterId === selectedCluster?.clusterId) {
-          return { ...c, relatedPhotos: c.relatedPhotos.filter(p => !(p.itemId === face.itemId && p.faceIndex === face.faceIndex)) }
-        }
-        return c;
-      });
-      return newClusters.filter(c => c.relatedPhotos.length > 0);
-    });
-
-    try {
-      const res = await fetch(`${API_BASE}/gallery/clusters/merge`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId, faces: [face] })
-      });
-      if (!res.ok) throw new Error('Quick tag failed');
-
-      setMessage({ type: 'success', text: 'Face identified successfully.' });
-
-      // Trigger silent background AI sync
-      fetch(`${API_BASE}/gallery/refresh`, { method: 'POST' });
-
-      const freshData = await fetchData(true);
-      maybeOfferProfilePictureFallback(userId, face.itemId, freshData.users);
-
-      // Auto-close if this was the last face in the cluster
-      if (selectedCluster && selectedCluster.relatedPhotos.length <= 1) {
-        setSelectedCluster(null);
-      }
-    } catch (err: any) {
-      setMessage({ type: 'error', text: err.message });
-      fetchData(true); // revert silently
     } finally {
       setMerging(false);
     }
@@ -208,12 +253,10 @@ export default function People() {
       setMessage({ type: 'info', text: 'Select at least one face to ignore.' });
       return;
     }
-    if (!window.confirm(`Mark ${selectedFaces.length} selected face(s) as 'Not a Person'? They will be hidden from discovery.`)) return;
+    if (!window.confirm(`Mark ${selectedFaces.length} selected face(s) as 'Not a Person'?`)) return;
 
     setIgnoring(true);
     const facesToIgnore = [...selectedFaces];
-
-    // Optimistic UI update
     const currentClusterId = selectedCluster.clusterId;
     setSelectedCluster(null);
     setClusters(prev => prev.filter(c => c.clusterId !== currentClusterId));
@@ -227,7 +270,7 @@ export default function People() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
 
-      setMessage({ type: 'success', text: 'Selected faces hidden from discovery.' });
+      setMessage({ type: 'success', text: 'Selected faces hidden.' });
       await fetchData(true);
     } catch (err: any) {
       setMessage({ type: 'error', text: err.message || 'Ignore failed.' });
@@ -237,442 +280,344 @@ export default function People() {
   };
 
   const handleResetIgnored = async () => {
-    if (!window.confirm("Bring back all 'Ignored' faces to the Discovery list?")) return;
+    if (!window.confirm("Restore all hidden faces?")) return;
     try {
       const res = await fetch(`${API_BASE}/gallery/clusters/reset-ignored`, { method: 'POST' });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
-      setMessage({ type: 'success', text: data.message });
+      if (!res.ok) throw new Error('Reset failed');
+      setMessage({ type: 'success', text: 'Discovery backlog cleared.' });
       fetchData(true);
     } catch (err: any) {
       setMessage({ type: 'error', text: err.message });
     }
   };
 
-  const openPreview = async (faces: { itemId: number; box?: any; url: string } | { itemId: number; box?: any; url: string }[]) => {
-    const list = Array.isArray(faces) ? faces : [faces];
-    if (list.length === 0) return;
-
+  const openPreview = async (item: any) => {
     setPreviewNaturalSize(null);
-    setPreview({
-      open: true,
-      itemId: list[0].itemId,
-      item: null,
-      boxes: list.map(f => f.box).filter(b => !!b),
-      loading: true,
-      error: null
-    });
-
+    setPreview({ open: true, itemId: item.id, item: null, boxes: [], loading: true, error: null });
     try {
-      const data = await fetchGalleryItem(list[0].itemId);
+      const data = await fetchGalleryItem(item.id);
       setPreview(prev => ({ ...prev, item: data, loading: false }));
-    } catch (e: any) {
-      setPreview(prev => ({ ...prev, loading: false, error: 'Failed to load photo.' }));
+    } catch {
+      setPreview(prev => ({ ...prev, loading: false, error: 'Load failed' }));
     }
   };
 
+  // Effect for prefetching evidence pics in selectedCluster cluster
+  useEffect(() => {
+    setModalSearchTerm('');
+    if (!selectedCluster) { setSelectedFaces([]); setShowAllFaces(false); return; }
+    setSelectedFaces([{ itemId: selectedCluster.relatedPhotos[0].itemId, faceIndex: selectedCluster.relatedPhotos[0].faceIndex }]);
+  }, [selectedCluster]);
+
   return (
-    <div style={{ paddingBottom: '6rem', minHeight: '100vh' }}>
-      <div style={{ marginBottom: '3rem' }}>
-        <motion.h2
-          initial={{ opacity: 0, x: -20 }}
-          animate={{ opacity: 1, x: 0 }}
-          style={{ fontSize: '3.5rem', fontWeight: 900, letterSpacing: '-0.04em', margin: '0 0 0.5rem', color: 'var(--text-main)' }}
-        >
-          People Discovery
-        </motion.h2>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
-          <div>
-            <p style={{ color: 'var(--text-muted)', fontSize: '1.1rem', margin: 0, maxWidth: '600px' }}>
-              Our AI found these unknown faces. Review them to build your personal face recognition library.
-            </p>
-            <button
-              onClick={handleResetIgnored}
-              style={{ background: 'transparent', border: 'none', color: 'var(--primary)', fontSize: '0.85rem', textDecoration: 'underline', cursor: 'pointer', padding: 0, marginTop: '0.5rem', fontWeight: 700 }}
-            >
-              Reset Ignored Faces (Restore hidden people)
-            </button>
+    <div style={{ paddingBottom: '6rem', minHeight: '100vh', maxWidth: '1400px', margin: '0 auto', padding: '0 1.5rem' }}>
+      
+      {/* 🌊 Hyper-Modern Clean Header Array */}
+      <div style={{ 
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center', 
+        flexWrap: 'wrap', gap: '1.5rem', marginTop: '2.5rem', marginBottom: '3rem' 
+      }}>
+        <div>
+          <h1 style={{ fontSize: '2.25rem', fontWeight: 800, margin: 0, letterSpacing: '-0.02em' }}>People & Faces</h1>
+          <p className="text-muted" style={{ fontSize: '0.95rem', margin: '0.3rem 0 0' }}>Manage {users.length} recognized identities and {clusters.length} pending groups.</p>
+        </div>
+
+        <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
+          {/* Dynamic Search Input */}
+          <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+            <Search size={16} style={{ position: 'absolute', left: '12px', opacity: 0.4 }} />
+            <input 
+              type="text" 
+              placeholder="Search people..." 
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              style={{ 
+                background: 'var(--bg-card)', 
+                border: '1px solid var(--border-color)', 
+                height: '42px',
+                padding: '0 1rem 0 2.5rem', 
+                borderRadius: '10px', 
+                fontSize: '0.9rem', 
+                width: '220px', 
+                outline: 'none'
+              }}
+            />
           </div>
-          <button
+
+          {/* Sort Filter Pod */}
+          <select 
+            value={sortBy}
+            onChange={(e: any) => setSortBy(e.target.value)}
+            style={{
+              background: 'var(--bg-card)', 
+              border: '1px solid var(--border-color)', 
+              height: '42px',
+              padding: '0 1rem', 
+              borderRadius: '10px', 
+              fontSize: '0.9rem', 
+              cursor: 'pointer',
+              outline: 'none'
+            }}
+          >
+            <option value="count">Most Photos</option>
+            <option value="name">Alphabetical</option>
+          </select>
+
+          <button 
             onClick={() => {
               fetch(`${API_BASE}/gallery/refresh`, { method: 'POST' });
-              setMessage({ type: 'info', text: 'Deep scanning gallery...' });
-              setTimeout(() => fetchData(), 3000);
+              setMessage({ type: 'info', text: 'AI processing scans in background...' });
             }}
             className="btn btn-primary"
-            style={{ borderRadius: '16px', padding: '12px 28px', fontWeight: 700, fontSize: '1rem', boxShadow: '0 10px 25px -5px rgba(99,102,241,0.4)' }}
           >
-            Run AI Sync
+            <Combine size={16} /> Scan Library
           </button>
         </div>
       </div>
 
       {loading ? (
-        <div style={{ display: 'flex', justifyContent: 'center', padding: '100px 0' }}>
-          <div className="loading-spinner" style={{ width: 60, height: 60, borderTopColor: 'var(--primary)' }}></div>
+        <div style={{ 
+          display: 'grid', 
+          gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', 
+          gap: '2.5rem 1.5rem' 
+        }}>
+          {[1,2,3,4,5,6,7,8,9,10].map(i => (
+            <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px', opacity: 0.5 }}>
+              <div style={{ width: '100px', height: '100px', borderRadius: '50%', background: 'var(--bg-card)', animation: 'pulse 1.5s infinite' }} />
+              <div style={{ height: '0.8rem', width: '60%', background: 'var(--bg-card)', borderRadius: '4px', animation: 'pulse 1.5s infinite' }} />
+            </div>
+          ))}
         </div>
-      ) : clusters.length === 0 ? (
-        <motion.div
-          initial={{ opacity: 0, scale: 0.95 }}
-          animate={{ opacity: 1, scale: 1 }}
-          style={{ background: 'white', borderRadius: '32px', padding: '80px 20px', textAlign: 'center', border: '1px dashed var(--border-color)', boxShadow: 'var(--shadow)' }}
-        >
-          <div style={{ background: 'rgba(99,102,241,0.1)', width: '80px', height: '80px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 1.5rem' }}>
-            <UserPlus size={40} color="var(--primary)" />
-          </div>
-          <h3 style={{ fontSize: '1.5rem', fontWeight: 700, margin: '0 0 0.5rem' }}>All Caught Up!</h3>
-          <p style={{ color: 'var(--text-muted)', margin: '0 0 1.5rem' }}>Every face in your gallery has been identified or ignored.</p>
-          <button
-            onClick={handleResetIgnored}
-            className="btn btn-outline"
-            style={{ borderRadius: '12px', padding: '8px 20px' }}
-          >
-            View Ignored Faces
-          </button>
-        </motion.div>
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '2.5rem' }}>
-          <AnimatePresence>
-            {clusters.map((cluster, idx) => (
-              <motion.div
-                key={cluster.clusterId}
-                initial={{ opacity: 0, y: 30 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: idx * 0.05 }}
-                className="discovery-card"
-                style={{
-                  cursor: 'pointer',
-                  borderRadius: '32px',
-                  background: 'white',
-                  border: '1px solid var(--border-color)',
-                  overflow: 'hidden',
-                  position: 'relative',
-                  transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-                  boxShadow: 'var(--shadow)'
-                }}
-                whileHover={{ y: -10, background: '#ffffff', border: '1px solid #cbd5e1' }}
-                onClick={() => setSelectedCluster(cluster)}
-              >
-                <div style={{ height: '300px', position: 'relative', background: '#000' }}>
-                  <img
-                    src={cluster.anchorImage}
-                    alt="Unknown photo"
-                    style={{
-                      width: '100%',
-                      height: '100%',
-                      objectFit: 'cover',
-                      display: 'block',
-                    }}
-                  />
-                  <div style={{ position: 'absolute', bottom: '1.5rem', left: '1.5rem', background: 'rgba(99,102,241,0.95)', padding: '6px 16px', borderRadius: '99px', fontSize: '0.85rem', fontWeight: 900, color: 'white', backdropFilter: 'blur(10px)' }}>
-                    {cluster.faceCount} {cluster.faceCount === 1 ? 'Unknown Face' : 'Unknown Faces'}
-                  </div>
-                </div>
-                <div style={{ padding: '1.5rem', textAlign: 'center' }}>
-                  <h4 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 800 }}>Unmatched Photo</h4>
-                  <p style={{ margin: '0.4rem 0 0', color: 'var(--text-muted)', fontSize: '0.9rem' }}>Open this photo and assign the correct user manually</p>
-                </div>
-              </motion.div>
-            ))}
-          </AnimatePresence>
-        </div>
-      )}
+        <>
+          {/* 👥 SECTION ONE: KNOWN PEOPLE */}
+          <div style={{ marginBottom: '4.5rem' }}>
+            <h2 style={{ fontSize: '1.1rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '2rem', color: 'rgba(255,255,255,0.7)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              Recognized Individuals <span style={{ opacity: 0.4, fontWeight: 400, fontSize: '0.9rem' }}>({filteredAndSortedUsers.length})</span>
+            </h2>
 
-      {/* DISCOVERY MODAL */}
-      <AnimatePresence>
-        {selectedCluster && (
-          <motion.div
-            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.9)', backdropFilter: 'blur(20px)', zIndex: 4000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1.5rem' }}
-            onClick={() => setSelectedCluster(null)}
-          >
-            <motion.div
-              initial={{ scale: 0.9, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.9, y: 20 }}
-              onClick={e => e.stopPropagation()}
-              style={{ background: '#0b1020', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '32px', padding: '2.5rem', width: '100%', maxWidth: '750px', maxHeight: '92vh', overflowY: 'auto', boxShadow: '0 50px 100px -20px rgba(0,0,0,0.8)' }}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '2rem' }}>
-                <div>
-                  <h3 style={{ margin: 0, fontSize: '2rem', fontWeight: 900, color: 'white' }}>Review Person</h3>
-                  <p style={{ margin: '0.25rem 0 0', color: 'rgba(255,255,255,0.4)' }}>Choose a user to assign these {selectedFaces.length} selected photos.</p>
-                </div>
-                <button onClick={() => setSelectedCluster(null)} style={{ background: 'rgba(255,255,255,0.05)', border: 'none', color: 'white', cursor: 'pointer', width: '44px', height: '44px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><X size={24} /></button>
+            {filteredAndSortedUsers.length === 0 ? (
+              <div style={{ padding: '3rem', background: 'rgba(255,255,255,0.02)', borderRadius: '20px', textAlign: 'center', border: '1px dashed var(--border-color)' }}>
+                <p className="text-muted">No people found matching "{searchTerm}".</p>
               </div>
-
-              {/* Focus Face & Actions */}
-              <div style={{ display: 'flex', gap: '2rem', alignItems: 'center', background: 'rgba(255,255,255,0.03)', padding: '1.5rem', borderRadius: '24px', border: '1px solid rgba(255,255,255,0.06)', marginBottom: '2.5rem' }}>
-                <FaceCrop src={selectedCluster.anchorImage} box={selectedCluster.anchorBox} size={140} borderRadius={24} paddingFactor={1.3} />
-                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                  <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-                    <AnimatePresence>
-                      {selectedFaces.length > 0 && (
-                        <motion.button
-                          initial={{ opacity: 0, scale: 0.9 }}
-                          animate={{ opacity: 1, scale: 1 }}
-                          exit={{ opacity: 0, scale: 0.9 }}
-                          onClick={() => {
-                            const firstSelected = selectedFaces[0];
-                            // Find ALL selected faces that belong to the SAME photo as the first selected one
-                            const samePhotoFaces = selectedCluster.relatedPhotos.filter(p =>
-                              selectedFaces.some(sf => sf.itemId === p.itemId && sf.faceIndex === p.faceIndex) &&
-                              p.itemId === firstSelected.itemId
-                            );
-                            if (samePhotoFaces.length > 0) openPreview(samePhotoFaces);
-                          }}
-                          style={{ flex: '1 1 120px', background: 'rgba(99, 102, 241, 0.15)', border: '1px solid rgba(99, 102, 241, 0.3)', color: 'var(--primary)', padding: '12px', borderRadius: '14px', fontWeight: 800, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.6rem' }}
-                        >
-                          <Eye size={18} /> View Selected
-                        </motion.button>
-                      )}
-                    </AnimatePresence>
-
-                    <button
-                      onClick={handleIgnore}
-                      disabled={ignoring || merging || selectedFaces.length === 0}
-                      style={{ flex: '1 1 120px', background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.2)', color: '#f87171', padding: '12px', borderRadius: '14px', fontWeight: 800, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.6rem', opacity: selectedFaces.length === 0 ? 0.5 : 1 }}
-                    >
-                      <EyeOff size={18} /> Not a Person
-                    </button>
-
-                    <button
-                      onClick={() => setShowAllFaces(!showAllFaces)}
-                      style={{ flex: '1 1 120px', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: 'white', padding: '12px', borderRadius: '14px', fontWeight: 800, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.6rem' }}
-                    >
-                      {showAllFaces ? <EyeOff size={18} /> : <Eye size={18} />}
-                      {showAllFaces ? 'Hide photos' : `See all ${selectedCluster.faceCount}`}
-                    </button>
-                  </div>
-                  <p style={{ margin: 0, fontSize: '0.85rem', color: 'rgba(255,255,255,0.3)', fontStyle: 'italic' }}>
-                    {selectedFaces.length > 0 ? `Click 'View Selected' to inspect the ${selectedFaces.length} marked photos.` : "Tip: Select individual photos below to tag or ignore them."}
-                  </p>
-                </div>
-              </div>
-
-              {/* Photo Evidence (Collapsible) */}
-              <AnimatePresence>
-                {showAllFaces && (
+            ) : (
+              <div style={{ 
+                display: 'grid', 
+                gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', 
+                gap: '2.5rem 1.5rem' 
+              }}>
+                {filteredAndSortedUsers.map((user, idx) => (
                   <motion.div
-                    initial={{ height: 0, opacity: 0 }}
-                    animate={{ height: 'auto', opacity: 1 }}
-                    exit={{ height: 0, opacity: 0 }}
-                    style={{ overflow: 'visible', marginBottom: '2.5rem' }}
+                    key={user.id}
+                    initial={{ opacity: 0, scale: 0.9 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    whileHover={{ y: -4 }}
+                    transition={{ delay: idx * 0.02 }}
+                    style={{ cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}
+                    onClick={() => handleOpenPersonDetail(user)}
                   >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-                      <div style={{ color: 'rgba(255,255,255,0.6)', fontWeight: 900, fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Select Photos to Tag/Ignore</div>
-                      <div style={{ display: 'flex', gap: '1rem' }}>
-                        <button onClick={() => setSelectedFaces(selectedCluster.relatedPhotos.map(p => ({ itemId: p.itemId, faceIndex: p.faceIndex })))} style={{ background: 'transparent', border: 'none', color: 'var(--primary)', fontWeight: 800, fontSize: '0.75rem', cursor: 'pointer' }}>Select All</button>
-                        <button onClick={() => setSelectedFaces([])} style={{ background: 'transparent', border: 'none', color: 'rgba(255,255,255,0.4)', fontWeight: 800, fontSize: '0.75rem', cursor: 'pointer' }}>Clear</button>
+                    <div style={{ 
+                      width: '110px', height: '110px', borderRadius: '50%', overflow: 'hidden', 
+                      boxShadow: '0 10px 25px rgba(0,0,0,0.2)', marginBottom: '12px',
+                      border: '3px solid rgba(255,255,255,0.05)', background: '#1e293b',
+                      transition: 'transform 0.2s'
+                    }} className="circular-face-container">
+                      <img 
+                        src={user.profilePicture || `https://ui-avatars.com/api/?name=${encodeURIComponent(user.name)}&background=6366f1&color=fff&size=128`} 
+                        alt={user.name}
+                        loading="lazy"
+                        style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                      />
+                    </div>
+                    <h3 style={{ margin: 0, fontSize: '0.95rem', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%', color: 'var(--text-main)' }}>{user.name}</h3>
+                    <span style={{ fontSize: '0.75rem', opacity: 0.5, marginTop: '2px' }}>{user.photoCount} items</span>
+                  </motion.div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* 🕵🏾 SECTION TWO: UNNAMED DISCOVERY CLUSTERS */}
+          {clusters.length > 0 && (
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
+                <h2 style={{ fontSize: '1.1rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'rgba(255,255,255,0.7)', display: 'flex', alignItems: 'center', gap: '8px', margin: 0 }}>
+                  Add Names <span style={{ opacity: 0.4, fontWeight: 400, fontSize: '0.9rem' }}>({clusters.length})</span>
+                </h2>
+                <button 
+                  onClick={handleResetIgnored}
+                  style={{ background: 'transparent', border: 'none', color: 'var(--primary)', fontSize: '0.8rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontWeight: 600 }}
+                >
+                  <EyeOff size={14} /> Recover Ignored
+                </button>
+              </div>
+
+              <div style={{ 
+                display: 'grid', 
+                gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', 
+                gap: '2.5rem 1.5rem' 
+              }}>
+                {clusters.map((cluster, idx) => (
+                  <motion.div
+                    key={cluster.clusterId}
+                    initial={{ opacity: 0, scale: 0.9 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    whileHover={{ y: -4 }}
+                    transition={{ delay: idx * 0.02 }}
+                    style={{ cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}
+                    onClick={() => setSelectedCluster(cluster)}
+                  >
+                    <div style={{ 
+                      width: '110px', height: '110px', borderRadius: '50%', overflow: 'hidden', 
+                      boxShadow: '0 10px 20px rgba(0,0,0,0.3)', marginBottom: '12px',
+                      border: '3px dashed rgba(255,255,255,0.2)', background: '#0f172a',
+                      position: 'relative'
+                    }}>
+                      {/* We use FaceCrop if box data is present, otherwise img fallback */}
+                      {cluster.anchorBox ? (
+                        <FaceCrop src={cluster.anchorImage} box={cluster.anchorBox} size={110} borderRadius={100} paddingFactor={1.2} />
+                      ) : (
+                        <img src={cluster.anchorImage} alt="Unmatched" style={{ width: '100%', height: '100%', objectFit: 'cover', opacity: 0.8 }} />
+                      )}
+                      <div style={{ 
+                        position: 'absolute', bottom: '4px', right: '4px', 
+                        background: 'var(--primary)', borderRadius: '50%', 
+                        width: '24px', height: '24px', display: 'flex', 
+                        alignItems: 'center', justifyContent: 'center', color: 'white',
+                        border: '2px solid #0f172a', boxShadow: '0 2px 6px rgba(0,0,0,0.4)'
+                      }}>
+                        <UserPlus size={12} />
                       </div>
                     </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: '1.25rem' }}>
-                      {selectedCluster.relatedPhotos.map(p => {
-                        const isSelected = selectedFaces.some(f => f.itemId === p.itemId && f.faceIndex === p.faceIndex);
-                        return (
-                          <div
-                            key={`${p.itemId}-${p.faceIndex}`}
-                            draggable
-                            onDragStart={(e) => {
-                              e.dataTransfer.setData('face', JSON.stringify({ itemId: p.itemId, faceIndex: p.faceIndex }));
-                              e.currentTarget.style.opacity = '0.4';
-                              e.currentTarget.style.transform = 'scale(0.9)';
-                            }}
-                            onDragEnd={(e) => {
-                              e.currentTarget.style.opacity = isSelected ? '1' : '0.4';
-                              e.currentTarget.style.transform = 'scale(1)';
-                            }}
-                            style={{ position: 'relative', cursor: 'grab', transition: 'all 0.2s' }}
-                            onClick={() => toggleFace({ itemId: p.itemId, faceIndex: p.faceIndex })}
-                            onDoubleClick={(e) => { e.stopPropagation(); openPreview(p); }}
-                          >
-                            <FaceCrop
-                              src={p.url}
-                              box={p.box}
-                              size={130}
-                              borderRadius={20}
-                              paddingFactor={1.3}
-                              style={{ border: isSelected ? '3px solid var(--primary)' : '2px solid rgba(255,255,255,0.1)', opacity: isSelected ? 1 : 0.4 }}
-                            />
-                            {isSelected && (
-                              <div style={{ position: 'absolute', top: -5, right: -5, background: 'var(--primary)', width: 26, height: 26, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 900, fontSize: '12px', border: '2px solid #0b1020' }}>
-                                ✓
-                              </div>
-                            )}
-                            {/* QUICK ASSIGN DROPDOWN */}
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setActiveMenuFace(activeMenuFace?.itemId === p.itemId && activeMenuFace?.faceIndex === p.faceIndex ? null : { itemId: p.itemId, faceIndex: p.faceIndex });
-                              }}
-                              style={{ position: 'absolute', bottom: -6, left: -6, background: 'var(--primary)', border: '2px solid rgba(255,255,255,0.3)', width: 36, height: 36, borderRadius: '50%', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', zIndex: 10, boxShadow: '0 4px 10px rgba(99,102,241,0.4)', transition: 'all 0.2s', transform: activeMenuFace?.itemId === p.itemId && activeMenuFace?.faceIndex === p.faceIndex ? 'scale(1.1)' : 'scale(1)' }}
-                            >
-                              <UserPlus size={18} />
-                            </button>
-
-                            <AnimatePresence>
-                              {activeMenuFace?.itemId === p.itemId && activeMenuFace?.faceIndex === p.faceIndex && (
-                                <motion.div
-                                  initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                                  exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                                  style={{ position: 'absolute', bottom: '110%', left: 0, background: '#12172b', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '16px', padding: '0.6rem', zIndex: 1000, boxShadow: '0 20px 50px rgba(0,0,0,0.6)', width: '200px', pointerEvents: 'auto' }}
-                                  onClick={e => e.stopPropagation()}
-                                >
-                                  <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.4)', padding: '4px 10px', textTransform: 'uppercase', fontWeight: 900, letterSpacing: '0.05em' }}>Identify As...</div>
-                                  <div style={{ maxHeight: '200px', overflowY: 'auto', scrollbarWidth: 'none' }}>
-                                    {users.map(u => (
-                                      <button
-                                        key={u.id}
-                                        onClick={() => {
-                                          handleMergeOne(u.id, p);
-                                          setActiveMenuFace(null);
-                                        }}
-                                        style={{ width: '100%', background: 'transparent', border: 'none', color: 'white', padding: '10px', textAlign: 'left', borderRadius: '10px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '12px', transition: 'background 0.2s' }}
-                                        onMouseEnter={e => e.currentTarget.style.background = 'rgba(99, 102, 241, 0.15)'}
-                                        onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
-                                      >
-                                        <img src={u.profilePicture || `https://ui-avatars.com/api/?name=${u.name}`} style={{ width: '32px', height: '32px', borderRadius: '50%', objectFit: 'cover', border: '1px solid rgba(255,255,255,0.1)' }} />
-                                        <span style={{ fontSize: '0.9rem', fontWeight: 700 }}>{u.name}</span>
-                                      </button>
-                                    ))}
-                                  </div>
-                                </motion.div>
-                              )}
-                            </AnimatePresence>
-                          </div>
-                        );
-                      })}
-                    </div>
+                    <h3 style={{ margin: 0, fontSize: '0.9rem', fontWeight: 700, color: 'var(--primary)' }}>Add Name</h3>
+                    <span style={{ fontSize: '0.75rem', opacity: 0.5, marginTop: '2px' }}>{cluster.faceCount} photos</span>
                   </motion.div>
-                )}
-              </AnimatePresence>
-
-              {/* Sticky User Selection at Bottom */}
-              <div style={{
-                position: 'sticky',
-                bottom: '-2.5rem',
-                left: '-2.5rem',
-                right: '-2.5rem',
-                background: 'rgba(11, 16, 32, 0.95)',
-                backdropFilter: 'blur(20px)',
-                padding: '1.5rem 2.5rem',
-                borderTop: '1px solid rgba(255,255,255,0.1)',
-                margin: '2.5rem -2.5rem -2.5rem -2.5rem',
-                zIndex: 100,
-                borderBottomLeftRadius: '32px',
-                borderBottomRightRadius: '32px'
-              }}>
-                <div style={{ color: 'rgba(255,255,255,0.6)', fontWeight: 900, fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '1.25rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span>{selectedFaces.length > 0 ? `Assign ${selectedFaces.length} Selected` : "Drag a photo onto a user to Tag"}</span>
-                  {selectedFaces.length === 0 && <span style={{ color: 'var(--primary)', textTransform: 'none', fontStyle: 'italic' }}>Tip: Drag & Drop photo here</span>}
-                </div>
-                <div style={{ display: 'flex', gap: '1.25rem', overflowX: 'auto', paddingBottom: '0.5rem', scrollbarWidth: 'none' }}>
-                  {users.map(u => (
-                    <motion.button
-                      key={u.id}
-                      whileHover={{ y: -5, background: 'rgba(99,102,241,0.15)', border: '1px solid rgba(99,102,241,0.3)' }}
-                      onDragOver={(e) => {
-                        e.preventDefault();
-                        e.currentTarget.style.background = 'rgba(99,102,241,0.3)';
-                        e.currentTarget.style.borderColor = 'var(--primary)';
-                      }}
-                      onDragLeave={(e) => {
-                        e.currentTarget.style.background = 'rgba(255,255,255,0.03)';
-                        e.currentTarget.style.borderColor = 'rgba(255,255,255,0.08)';
-                      }}
-                      onDrop={async (e) => {
-                        e.preventDefault();
-                        e.currentTarget.style.background = 'rgba(255,255,255,0.03)';
-                        const data = e.dataTransfer.getData('face');
-                        if (data) {
-                          const face = JSON.parse(data);
-                          // If dropping a face that is part of the selection, tag ALL selected
-                          // Otherwise, just tag that one face
-                          const isPartOfSelection = selectedFaces.some(f => f.itemId === face.itemId && f.faceIndex === face.faceIndex);
-                          const facesToTag = isPartOfSelection ? selectedFaces : [face];
-
-                          setMerging(true);
-                          try {
-                            const res = await fetch(`${API_BASE}/gallery/clusters/merge`, {
-                              method: 'POST',
-                              headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({ userId: u.id, faces: facesToTag })
-                            });
-                            const result = await res.json();
-                            if (!res.ok) throw new Error(result.error);
-                            setMessage({ type: 'success', text: `Tagged ${facesToTag.length} photos to ${u.name}` });
-                            const freshData = await fetchData();
-                            await maybeOfferProfilePictureFallback(u.id, facesToTag[0].itemId, freshData.users);
-                            setSelectedCluster(null);
-                          } catch (err: any) {
-                            setMessage({ type: 'error', text: err.message });
-                          } finally {
-                            setMerging(false);
-                          }
-                        }
-                      }}
-                      onClick={() => handleMerge(u.id)}
-                      disabled={merging}
-                      style={{
-                        flex: '0 0 140px',
-                        background: 'rgba(255,255,255,0.03)',
-                        border: '1px solid rgba(255,255,255,0.08)',
-                        borderRadius: '20px',
-                        padding: '1rem',
-                        cursor: merging ? 'not-allowed' : 'pointer',
-                        color: 'white',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        alignItems: 'center',
-                        gap: '0.75rem',
-                        transition: 'all 0.2s',
-                        position: 'relative'
-                      }}
-                    >
-                      <img src={u.profilePicture || `https://ui-avatars.com/api/?name=${u.name}`} style={{ width: '50px', height: '50px', borderRadius: '50%', objectFit: 'cover', border: '2px solid rgba(255,255,255,0.1)', pointerEvents: 'none' }} />
-                      <span style={{ fontSize: '0.85rem', fontWeight: 700, pointerEvents: 'none' }}>{u.name}</span>
-                    </motion.button>
-                  ))}
-                </div>
+                ))}
               </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+            </div>
+          )}
+        </>
+      )}
 
-      {/* FULL PHOTO PREVIEW (Same as Gallery) */}
+      {/* ──────────────────────────────────────────────────────────────────
+           🧑🏽‍🎤 PERSON DETAIL GLASSMORPHIC MODAL
+          ────────────────────────────────────────────────────────────────── */}
       <AnimatePresence>
-        {preview.open && (
+        {selectedPerson && (
           <motion.div
             initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.92)', backdropFilter: 'blur(15px)', zIndex: 5000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2rem' }}
-            onClick={() => setPreview({ ...preview, open: false })}
+            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.95)', backdropFilter: 'blur(25px)', zIndex: 3000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1.5rem' }}
+            onClick={() => setSelectedPerson(null)}
           >
             <motion.div
-              initial={{ scale: 0.95 }} animate={{ scale: 1 }} exit={{ scale: 0.95 }}
-              onClick={(e) => e.stopPropagation()}
-              style={{ width: 'min(1000px, 95vw)', maxHeight: '90vh', overflow: 'hidden', background: '#070a16', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '28px', display: 'flex', flexDirection: 'column' }}
+              initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }}
+              transition={{ type: 'spring', damping: 25, stiffness: 280 }}
+              style={{ 
+                background: '#0b0f19', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '32px', 
+                width: '100%', maxWidth: '1400px', maxHeight: '90vh', display: 'flex', flexDirection: 'column',
+                overflow: 'hidden', boxShadow: '0 50px 100px rgba(0,0,0,0.8)'
+              }}
+              onClick={e => e.stopPropagation()}
             >
-              <div style={{ padding: '1.25rem 1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-                <div style={{ color: 'white', fontWeight: 900, fontSize: '1.1rem' }}>Evidence Review</div>
-                <button onClick={() => setPreview({ ...preview, open: false })} style={{ background: 'transparent', border: 'none', color: 'white', cursor: 'pointer' }}><X size={24} /></button>
+              {/* Dynamic Header for Person */}
+              <div style={{ 
+                position: 'relative', padding: '2.5rem', flexShrink: 0, 
+                background: 'linear-gradient(135deg, rgba(99,102,241,0.15) 0%, rgba(255,255,255,0.03) 100%)', 
+                borderBottom: '1px solid rgba(255,255,255,0.08)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' 
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '2rem' }}>
+                  <img 
+                    src={selectedPerson.profilePicture || `https://ui-avatars.com/api/?name=${encodeURIComponent(selectedPerson.name)}&background=6366f1&color=fff&size=256`} 
+                    style={{ width: '120px', height: '120px', borderRadius: '50%', objectFit: 'cover', border: '4px solid rgba(255,255,255,0.1)', boxShadow: '0 10px 20px rgba(0,0,0,0.3)' }}
+                  />
+                  <div>
+                    <h2 style={{ fontSize: '2.5rem', fontWeight: 900, margin: 0, color: 'white', letterSpacing: '-0.02em' }}>{selectedPerson.name}</h2>
+                    <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', marginTop: '0.6rem', color: 'rgba(255,255,255,0.6)', fontSize: '0.95rem' }}>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><ImageIcon size={16} /> {personPhotos.length} Photos Found</span>
+                      {personPhotos.length > 0 && <span>•</span>}
+                      {personPhotos.length > 0 && <span style={{ background: 'rgba(16, 185, 129, 0.2)', color: '#34d399', border: '1px solid rgba(16,185,129,0.3)', padding: '3px 10px', borderRadius: '8px', fontSize: '0.7rem', fontWeight: 800, letterSpacing: '0.5px' }}>CONFIRMED IDENTITY</span>}
+                    </div>
+                  </div>
+                </div>
+
+                <button 
+                  onClick={() => setSelectedPerson(null)}
+                  style={{ background: 'rgba(255,255,255,0.08)', border: 'none', color: 'white', borderRadius: '50%', width: '48px', height: '48px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', transition: 'background 0.2s' }}
+                  onMouseOver={e => e.currentTarget.style.background = 'rgba(255,255,255,0.15)'}
+                  onMouseOut={e => e.currentTarget.style.background = 'rgba(255,255,255,0.08)'}
+                >
+                  <X size={24} />
+                </button>
               </div>
 
-              <div style={{ padding: '1.5rem', overflowY: 'auto', display: 'flex', justifyContent: 'center', alignItems: 'center', background: '#000' }}>
-                {preview.loading ? <div className="loading-spinner"></div> : preview.item && (
-                  <div style={{ position: 'relative' }}>
-                    <img src={preview.item.url} style={{ maxWidth: '100%', maxHeight: '70vh', borderRadius: '12px' }} onLoad={(e) => setPreviewNaturalSize({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })} />
-                    {previewNaturalSize && preview.boxes.map((box, i) => (
-                      <div key={i} style={{
-                        position: 'absolute',
-                        left: `${((box.x || box._x) / previewNaturalSize.w) * 100}%`,
-                        top: `${((box.y || box._y) / previewNaturalSize.h) * 100}%`,
-                        width: `${((box.width || box._width) / previewNaturalSize.w) * 100}%`,
-                        height: `${((box.height || box._height) / previewNaturalSize.h) * 100}%`,
-                        border: '4px solid var(--primary)',
-                        borderRadius: '8px',
-                        boxShadow: i === 0 ? '0 0 0 9999px rgba(0,0,0,0.4)' : 'none', // Darken background only for the first box to avoid overlap mess
-                        zIndex: 10
-                      }} />
+              {/* Content Grid - Chronological (Full Width) */}
+              <div style={{ flex: 1, overflowY: 'auto', padding: '2.5rem' }} className="custom-scrollbar">
+                {loadingPersonPhotos ? (
+                  <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '200px' }}>
+                    <div className="loading-spinner" style={{ width: '40px', height: '40px', border: '3px solid rgba(255,255,255,0.1)', borderTopColor: 'var(--primary)', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
+                  </div>
+                ) : groupedPersonPhotos.length === 0 ? (
+                  <div style={{ textAlign: 'center', padding: '6rem 2rem', color: 'rgba(255,255,255,0.4)' }}>
+                    <Info size={48} style={{ marginBottom: '1.25rem', opacity: 0.6 }} />
+                    <h3 style={{ color: 'white', fontSize: '1.25rem', fontWeight: 800 }}>No tagged photos found yet.</h3>
+                    <p style={{ fontSize: '0.95rem', marginTop: '0.5rem' }}>Run a library scan to automatically recognize this person in your uploads.</p>
+                  </div>
+                ) : (
+                  <div className="timeline-flow">
+                    {groupedPersonPhotos.map((group) => (
+                      <div key={group.title} style={{ marginBottom: '3rem' }}>
+                        <div style={{ 
+                          position: 'sticky', top: '-2px', zIndex: 20, background: '#0b0f19', 
+                          padding: '0.75rem 0', marginBottom: '1.25rem', borderBottom: '1px solid rgba(255,255,255,0.05)'
+                        }}>
+                          <h4 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 800, color: 'rgba(255,255,255,0.7)', letterSpacing: '0.5px' }}>{group.title}</h4>
+                        </div>
+                        <div style={{ 
+                          display: 'grid', 
+                          gridTemplateColumns: 'repeat(auto-fill, minmax(165px, 1fr))', 
+                          gap: '1.25rem' 
+                        }}>
+                          {group.items.map((item) => (
+                            <motion.div
+                              key={item.id}
+                              whileHover={{ scale: 1.03, y: -3 }}
+                              transition={{ duration: 0.2 }}
+                              style={{ 
+                                aspectRatio: '1 / 1', borderRadius: '16px', overflow: 'hidden', 
+                                cursor: 'pointer', position: 'relative', 
+                                border: '1px solid rgba(255,255,255,0.05)',
+                                boxShadow: '0 8px 16px rgba(0,0,0,0.2)',
+                                background: '#1e293b'
+                              }}
+                              onClick={() => openPreview(item)}
+                            >
+                              <img 
+                                src={item.thumbnailUrl || item.url} 
+                                alt=""
+                                loading="lazy"
+                                style={{ width: '100%', height: '100%', objectFit: 'cover', background: '#0f172a' }}
+                                onError={(e) => {
+                                  const target = e.currentTarget;
+                                  const full = (item as any).url;
+                                  if (target.src !== full && full) {
+                                    target.src = full;
+                                  } else {
+                                    target.style.display = 'none';
+                                    const parent = target.parentElement;
+                                    if (parent && !parent.querySelector('.img-placeholder')) {
+                                      const ph = document.createElement('div');
+                                      ph.className = 'img-placeholder';
+                                      ph.style.cssText = 'width:100%;height:100%;background:#1e293b;display:flex;align-items:center;justify-content:center;color:rgba(255,255,255,0.3);font-size:1.5rem;aspect-ratio:1/1;';
+                                      ph.textContent = '🖼️';
+                                      parent.insertBefore(ph, target);
+                                    }
+                                  }
+                                }}
+                              />
+                            </motion.div>
+                          ))}
+                        </div>
+                      </div>
                     ))}
                   </div>
                 )}
@@ -682,14 +627,155 @@ export default function People() {
         )}
       </AnimatePresence>
 
+      {/* ──────────────────────────────────────────────────────────────────
+           🔎 PREVIOUS LEGACY CLUSTER DISCOVERY MODAL (Stylized)
+          ────────────────────────────────────────────────────────────────── */}
+      <AnimatePresence>
+        {selectedCluster && (
+          <motion.div
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.95)', backdropFilter: 'blur(25px)', zIndex: 4000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1.5rem' }}
+            onClick={() => setSelectedCluster(null)}
+          >
+            <motion.div
+              initial={{ scale: 0.9, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.9, y: 20 }}
+              onClick={e => e.stopPropagation()}
+              style={{ 
+                background: '#0b0f19', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '32px', 
+                width: '100%', maxWidth: '700px', maxHeight: '85vh', overflowY: 'auto', 
+                boxShadow: '0 50px 100px rgba(0,0,0,0.8)', position: 'relative'
+              }}
+              className="custom-scrollbar"
+            >
+              {/* Compact Modal Header */}
+              <div style={{ padding: '2rem 2.5rem', borderBottom: '1px solid rgba(255,255,255,0.05)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: '1.5rem', fontWeight: 900, color: 'white' }}>Identity Assignment</h3>
+                  <p style={{ margin: '0.2rem 0 0', color: 'rgba(255,255,255,0.4)', fontSize: '0.9rem' }}>Help the AI learn who this person is.</p>
+                </div>
+                <button onClick={() => setSelectedCluster(null)} style={{ background: 'rgba(255,255,255,0.05)', border: 'none', color: 'white', width: '36px', height: '36px', borderRadius: '50%', cursor: 'pointer' }}><X size={18} /></button>
+              </div>
+
+              {/* Main Display Body */}
+              <div style={{ padding: '2.5rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '2.5rem' }}>
+                  <div style={{ position: 'relative', padding: '10px', background: 'linear-gradient(135deg, #6366f1 0%, #a855f7 100%)', borderRadius: '50%' }}>
+                    <FaceCrop 
+                      src={selectedCluster.anchorImage} 
+                      box={selectedCluster.anchorBox} 
+                      size={160} borderRadius={100} paddingFactor={1.3} 
+                      style={{ border: '5px solid #0b0f19' }}
+                    />
+                  </div>
+                </div>
+
+                <h4 style={{ textAlign: 'center', color: 'white', fontWeight: 800, margin: '0 0 1.5rem', letterSpacing: '0.03em' }}>ASSIGN THIS FACE TO</h4>
+                
+                {/* Modal User Search Box */}
+                <div style={{ position: 'relative', display: 'flex', alignItems: 'center', marginBottom: '1.5rem' }}>
+                  <Search size={16} style={{ position: 'absolute', left: '14px', opacity: 0.4, color: 'white' }} />
+                  <input 
+                    type="text" 
+                    placeholder="Search user name..." 
+                    value={modalSearchTerm}
+                    onChange={(e) => setModalSearchTerm(e.target.value)}
+                    style={{ 
+                      width: '100%',
+                      background: 'rgba(255, 255, 255, 0.04)', 
+                      border: '1px solid rgba(255, 255, 255, 0.08)', 
+                      padding: '0.75rem 1rem 0.75rem 2.75rem', 
+                      borderRadius: '14px', 
+                      fontSize: '0.9rem', 
+                      color: 'white',
+                      outline: 'none',
+                      boxShadow: 'inset 0 2px 4px rgba(0, 0, 0, 0.2)'
+                    }}
+                  />
+                </div>
+
+                {filteredModalUsers.length === 0 ? (
+                  <div style={{ textAlign: 'center', padding: '3rem 0', color: 'rgba(255, 255, 255, 0.4)', fontSize: '0.95rem' }}>
+                    No users found matching "{modalSearchTerm}".
+                  </div>
+                ) : (
+                  <div style={{ 
+                    display: 'grid', 
+                    gridTemplateColumns: 'repeat(auto-fill, minmax(110px, 1fr))', 
+                    gap: '1.25rem',
+                    marginBottom: '2rem'
+                  }}>
+                    {filteredModalUsers.map(u => (
+                      <motion.div
+                        key={u.id}
+                        whileHover={{ scale: 1.05, background: 'rgba(99,102,241,0.15)' }}
+                        onClick={() => handleMerge(u.id)}
+                        style={{ 
+                          background: 'rgba(255,255,255,0.03)', borderRadius: '20px', padding: '1rem', 
+                          display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px', 
+                          cursor: 'pointer', border: '1px solid rgba(255,255,255,0.05)' 
+                        }}
+                      >
+                        <img 
+                          src={u.profilePicture || `https://ui-avatars.com/api/?name=${encodeURIComponent(u.name)}&background=1e293b&color=fff`} 
+                          style={{ width: '50px', height: '50px', borderRadius: '50%', objectFit: 'cover' }} 
+                        />
+                        <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'white', textAlign: 'center' }}>{u.name}</span>
+                      </motion.div>
+                    ))}
+                  </div>
+                )}
+
+                <div style={{ borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '1.5rem', display: 'flex', gap: '1rem' }}>
+                   <button 
+                      onClick={handleIgnore}
+                      disabled={ignoring}
+                      style={{ flex: 1, background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.2)', color: '#f87171', padding: '0.8rem', borderRadius: '12px', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
+                    >
+                      <EyeOff size={16} /> Not a Person
+                    </button>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* LIGHTBOX PREVIEW FOR SINGLE IMAGE */}
+      <AnimatePresence>
+        {preview.open && (
+          <motion.div
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.96)', zIndex: 6000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2rem' }}
+            onClick={() => setPreview({ ...preview, open: false })}
+          >
+             <button style={{ position: 'absolute', top: '2rem', right: '2rem', background: 'transparent', border: 'none', color: 'white', cursor: 'pointer' }}><X size={36} /></button>
+             {preview.loading ? <div className="loading-spinner" /> : preview.item && (
+                <motion.img 
+                  initial={{ scale: 0.9 }} animate={{ scale: 1 }}
+                  src={preview.item.url} 
+                  style={{ maxWidth: '90vw', maxHeight: '90vh', objectFit: 'contain', borderRadius: '12px', boxShadow: '0 50px 100px rgba(0,0,0,0.6)' }} 
+                />
+             )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {message && (
         <motion.div
-          initial={{ y: 50, opacity: 0 }} animate={{ y: 0, opacity: 1 }}
-          style={{ position: 'fixed', bottom: '2rem', right: '2rem', background: message.type === 'error' ? 'rgba(239, 68, 68, 0.95)' : 'rgba(99, 102, 241, 0.95)', backdropFilter: 'blur(10px)', padding: '1rem 2rem', borderRadius: '20px', color: 'white', fontWeight: 800, zIndex: 9999, boxShadow: '0 20px 40px rgba(0,0,0,0.3)' }}
+          initial={{ y: 50, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 50, opacity: 0 }}
+          style={{ position: 'fixed', bottom: '2rem', right: '2rem', background: message.type === 'error' ? '#ef4444' : 'var(--primary)', backdropFilter: 'blur(10px)', padding: '1rem 2.5rem', borderRadius: '16px', color: 'white', fontWeight: 800, zIndex: 9999, boxShadow: '0 20px 40px rgba(0,0,0,0.3)' }}
         >
           {message.text}
         </motion.div>
       )}
+
+      <style>{`
+        @keyframes pulse { 0% { opacity: 0.4; } 50% { opacity: 0.7; } 100% { opacity: 0.4; } }
+        .circular-face-container:hover img { transform: scale(1.1); }
+        .circular-face-container img { transition: transform 0.3s ease; }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 10px; }
+      `}</style>
     </div>
   );
 }

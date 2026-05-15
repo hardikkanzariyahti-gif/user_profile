@@ -36,6 +36,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.uploadMemory = void 0;
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
 const multer_1 = __importDefault(require("multer"));
@@ -51,5 +52,7 @@ const storage = multer_1.default.diskStorage({
     },
 });
 const upload = (0, multer_1.default)({ storage });
+const uploadMemory = (0, multer_1.default)({ storage: multer_1.default.memoryStorage() });
+exports.uploadMemory = uploadMemory;
 exports.default = upload;
 //# sourceMappingURL=upload.js.map

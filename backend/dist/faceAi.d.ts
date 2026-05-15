@@ -1,64 +1,35 @@
 declare function loadModels(): Promise<void>;
 declare function euclideanDistance(d1: Float32Array, d2: Float32Array): number;
+declare function cosineDistance(d1: Float32Array, d2: Float32Array): number;
 declare function serializeDescriptor(descriptor: Float32Array | number[]): number[];
 declare function deserializeDescriptor(data: any): Float32Array | null;
-type MatchDecisionReason = 'matched' | 'threshold' | 'ambiguous' | 'no_candidates';
 type MatchResult = {
     label: string;
     distance: number | null;
-    candidate?: string;
     secondCandidate?: string;
     secondDistance?: number | null;
     margin?: number | null;
-    reason?: MatchDecisionReason;
+    reason?: 'matched' | 'threshold' | 'ambiguous' | 'no_candidates';
     confidence?: number;
 };
-/**
- * Match a 512D face descriptor against all known users.
- * Contains safety check for mixed 128D/512D arrays.
- */
-declare function findBestMatchWithMargin(descriptor: Float32Array, knownUsers: any[]): MatchResult;
-/**
- * Get the single best/largest face descriptor from an image (for profile pictures).
- */
+declare function findBestMatchWithMargin(descriptor: Float32Array, knownUsers: any[], isForcedRescan?: boolean): MatchResult;
 declare function getFaceDescriptor(imagePath: string): Promise<Float32Array | null>;
 declare function identifyFace(targetImagePath: string, knownUsers: any[]): Promise<MatchResult | null>;
-/**
- * Detect & identify ALL faces in an image
- */
-declare function identifyAllFaces(targetImagePath: string, knownUsers: any[]): Promise<{
-    label: string;
-    distance: number | null;
-    secondDistance: number | null;
-    margin: number | null;
-    reason: MatchDecisionReason | null;
-    confidence: number;
-    box: any;
-}[]>;
-/**
- * Instant recognition for upload - gets top suggestions per face with confidence
- */
+declare function identifyAllFaces(targetImagePath: string, knownUsers: any[]): Promise<any>;
 declare function getFaceSuggestions(targetImagePath: string, knownUsers: any[]): Promise<any[]>;
-/**
- * Just return all descriptor arrays.
- */
 declare function getAllDescriptors(imagePath: string): Promise<Float32Array[]>;
-/**
- * Core function for bulk gallery scanning — single image.
- */
 declare function detectFaces(imagePath: string): Promise<{
-    descriptor: Float32Array<ArrayBufferLike>;
-    box: any;
-}[]>;
-/**
- * Core function for bulk gallery scanning — PARALLEL BATCH.
- * Sends multiple images to Python in ONE request and processes them in parallel.
- * Returns results in same order as imagePaths.
- */
-declare function detectFacesBatch(imagePaths: string[]): Promise<Array<Array<{
-    descriptor: Float32Array;
-    box: any;
-}>>>;
+    faces: any;
+    metadata: any;
+}>;
+declare function detectFacesBatch(imagePaths: string[]): Promise<Array<{
+    faces: Array<{
+        descriptor: Float32Array;
+        box: any;
+    }>;
+    metadata: any;
+}>>;
+declare function extractMetadata(imagePath: string): Promise<any>;
 declare const _default: {
     getFaceDescriptor: typeof getFaceDescriptor;
     identifyFace: typeof identifyFace;
@@ -66,6 +37,7 @@ declare const _default: {
     getAllDescriptors: typeof getAllDescriptors;
     detectFaces: typeof detectFaces;
     detectFacesBatch: typeof detectFacesBatch;
+    extractMetadata: typeof extractMetadata;
     getFaceSuggestions: typeof getFaceSuggestions;
     serializeDescriptor: typeof serializeDescriptor;
     deserializeDescriptor: typeof deserializeDescriptor;
@@ -73,6 +45,7 @@ declare const _default: {
     loadModels: typeof loadModels;
     MATCH_THRESHOLD: number;
     euclideanDistance: typeof euclideanDistance;
+    cosineDistance: typeof cosineDistance;
 };
 export default _default;
 //# sourceMappingURL=faceAi.d.ts.map

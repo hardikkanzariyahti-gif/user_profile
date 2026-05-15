@@ -12,18 +12,18 @@ declare const albumRepository: {
             url: string;
             id: number;
             uploadedAt: Date;
-            label: string | null;
-            isProfile: boolean;
             userId: number | null;
+            isProfile: boolean;
             recognizedUserIds: number[];
-            hashtags: string[];
             faceDescriptors: import("@prisma/client/runtime/library").JsonValue | null;
+            scanStatus: string | null;
+            metadataStatus: string | null;
         }[];
     } & {
         id: number;
         userId: number;
-        title: string;
         description: string | null;
+        title: string;
         isGlobal: boolean;
         shareId: string;
         createdAt: Date;
@@ -37,18 +37,18 @@ declare const albumRepository: {
             url: string;
             id: number;
             uploadedAt: Date;
-            label: string | null;
-            isProfile: boolean;
             userId: number | null;
+            isProfile: boolean;
             recognizedUserIds: number[];
-            hashtags: string[];
             faceDescriptors: import("@prisma/client/runtime/library").JsonValue | null;
+            scanStatus: string | null;
+            metadataStatus: string | null;
         }[];
     } & {
         id: number;
         userId: number;
-        title: string;
         description: string | null;
+        title: string;
         isGlobal: boolean;
         shareId: string;
         createdAt: Date;
@@ -61,18 +61,18 @@ declare const albumRepository: {
             url: string;
             id: number;
             uploadedAt: Date;
-            label: string | null;
-            isProfile: boolean;
             userId: number | null;
+            isProfile: boolean;
             recognizedUserIds: number[];
-            hashtags: string[];
             faceDescriptors: import("@prisma/client/runtime/library").JsonValue | null;
+            scanStatus: string | null;
+            metadataStatus: string | null;
         }[];
     } & {
         id: number;
         userId: number;
-        title: string;
         description: string | null;
+        title: string;
         isGlobal: boolean;
         shareId: string;
         createdAt: Date;
@@ -85,18 +85,18 @@ declare const albumRepository: {
             url: string;
             id: number;
             uploadedAt: Date;
-            label: string | null;
-            isProfile: boolean;
             userId: number | null;
+            isProfile: boolean;
             recognizedUserIds: number[];
-            hashtags: string[];
             faceDescriptors: import("@prisma/client/runtime/library").JsonValue | null;
+            scanStatus: string | null;
+            metadataStatus: string | null;
         }[];
     } & {
         id: number;
         userId: number;
-        title: string;
         description: string | null;
+        title: string;
         isGlobal: boolean;
         shareId: string;
         createdAt: Date;
@@ -104,8 +104,8 @@ declare const albumRepository: {
     delete(id: number): import(".prisma/client").Prisma.Prisma__AlbumClient<{
         id: number;
         userId: number;
-        title: string;
         description: string | null;
+        title: string;
         isGlobal: boolean;
         shareId: string;
         createdAt: Date;
@@ -119,18 +119,18 @@ declare const albumRepository: {
             url: string;
             id: number;
             uploadedAt: Date;
-            label: string | null;
-            isProfile: boolean;
             userId: number | null;
+            isProfile: boolean;
             recognizedUserIds: number[];
-            hashtags: string[];
             faceDescriptors: import("@prisma/client/runtime/library").JsonValue | null;
+            scanStatus: string | null;
+            metadataStatus: string | null;
         }[];
     } & {
         id: number;
         userId: number;
-        title: string;
         description: string | null;
+        title: string;
         isGlobal: boolean;
         shareId: string;
         createdAt: Date;

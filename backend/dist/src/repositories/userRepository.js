@@ -52,6 +52,7 @@ const userRepository = {
                 name: true,
                 email: true,
                 profile_picture: true,
+                profile_pictures: true,
                 profileDescriptor: true,
             },
         });
@@ -65,6 +66,7 @@ const userRepository = {
                 name: true,
                 email: true,
                 profile_picture: true,
+                profile_pictures: true,
                 profileDescriptor: true,
             },
             orderBy: { id: 'asc' },

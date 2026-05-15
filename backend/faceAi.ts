@@ -1,10 +1,56 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import * as canvas from 'canvas';
+import * as faceapi from '@vladmandic/face-api';
 
-const AI_API_URL = 'http://localhost:8000/extract_faces';
-const AI_BATCH_URL = 'http://localhost:8000/extract_faces_batch';
+const { Canvas, Image, ImageData } = canvas;
+faceapi.env.monkeyPatch({ Canvas, Image, ImageData });
 
-const USE_MATCHER_V2 = true; // Enabled by default for multi-embedding support
+import sharp from 'sharp';
+
+async function getOptimizedImageBuffer(imagePath: string) {
+  try {
+    const originalMeta = await sharp(imagePath).metadata();
+    const origW = originalMeta.width || 1;
+    const origH = originalMeta.height || 1;
+
+    const buffer = await sharp(imagePath)
+      .rotate() // auto-orient based on EXIF tags
+      .resize({ width: 1280, height: 1280, fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 85 })
+      .toBuffer();
+
+    const resizedMeta = await sharp(buffer).metadata();
+    const resW = resizedMeta.width || 1;
+    const resH = resizedMeta.height || 1;
+
+    // If sharp rotate() swapped dimensions based on orientation tag, map correctly (5-8 indicate transposed axes)
+    const isRotated = originalMeta.orientation && [5, 6, 7, 8].includes(originalMeta.orientation);
+    const effectiveOrigW = isRotated ? origH : origW;
+    const effectiveOrigH = isRotated ? origW : origH;
+
+    const scaleX = effectiveOrigW / resW;
+    const scaleY = effectiveOrigH / resH;
+
+    return { buffer, scaleX, scaleY };
+  } catch (e) {
+    console.warn(`[Face AI] Sharp pre-resize failed for ${imagePath}, using fallback.`, e);
+    return { buffer: fs.readFileSync(imagePath), scaleX: 1, scaleY: 1 };
+  }
+}
+
+const MODEL_PATH = path.join(process.cwd(), 'models');
+// Cosine distance threshold (0 = perfect match, higher = worse match).
+// If your descriptors are L2-normalized (we do this), cosine similarity is dot-product,
+// and cosine distance = 1 - cosineSimilarity.
+const MATCH_THRESHOLD = numberFromEnv('FACE_MATCH_THRESHOLD', 0.18);
+const AMBIGUITY_MARGIN = numberFromEnv('FACE_AMBIGUITY_MARGIN', 0.035);
+const CONFIDENT_DISTANCE = numberFromEnv('FACE_CONFIDENT_DISTANCE', 0.14);
+const GROUP_MIN_FACE_SIZE = numberFromEnv('FACE_MIN_SIZE_PX', 10);
+const ROBUST_TOP_K = Math.max(1, Math.floor(numberFromEnv('FACE_ROBUST_TOP_K', 3)));
+
+let isLoaded = false;
+let hasSsdFallback = false;
 
 function numberFromEnv(key: string, fallback: number): number {
   const raw = process.env[key];
@@ -13,25 +59,18 @@ function numberFromEnv(key: string, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-const MATCH_CONFIG = {
-  // Legacy defaults preserved so existing behavior remains stable unless toggled/configured.
-  matchThreshold: numberFromEnv('FACE_MATCH_THRESHOLD', 0.75), // Optimized for distant group photo recognition
-  ambiguityMargin: numberFromEnv('FACE_AMBIGUITY_MARGIN', 0.15),
-  confidentThreshold: numberFromEnv('FACE_CONFIDENT_DISTANCE', 0.4),
-  robustTopK: Math.max(1, Math.floor(numberFromEnv('FACE_ROBUST_TOP_K', 3))),
-  robustNearThreshold: numberFromEnv('FACE_ROBUST_NEAR_THRESHOLD', 0.92),
-  robustMinSupport: Math.max(1, Math.floor(numberFromEnv('FACE_ROBUST_MIN_SUPPORT', 2))),
-};
-
-const MATCH_THRESHOLD = MATCH_CONFIG.matchThreshold;
-
-let isLoaded = false;
-
 async function loadModels(): Promise<void> {
-  // We dont load models to RAM in Node anymore! The Python server holds them.
   if (isLoaded) return;
-  console.log('Smart Systems (InsightFace Microservice Mode) Loaded! 🚀');
+  await faceapi.nets.tinyFaceDetector.loadFromDisk(MODEL_PATH);
+  await faceapi.nets.faceLandmark68TinyNet.loadFromDisk(MODEL_PATH);
+  await faceapi.nets.faceRecognitionNet.loadFromDisk(MODEL_PATH);
+  const ssdManifest = path.join(MODEL_PATH, 'ssd_mobilenetv1_model-weights_manifest.json');
+  hasSsdFallback = fs.existsSync(ssdManifest);
+  if (hasSsdFallback) {
+    await faceapi.nets.ssdMobilenetv1.loadFromDisk(MODEL_PATH);
+  }
   isLoaded = true;
+  console.log(`[Face API] tinyFaceDetector + landmark68Tiny + recognition loaded${hasSsdFallback ? ' (+ssd fallback)' : ''}`);
 }
 
 function euclideanDistance(d1: Float32Array, d2: Float32Array): number {
@@ -43,13 +82,27 @@ function euclideanDistance(d1: Float32Array, d2: Float32Array): number {
   return Math.sqrt(sum);
 }
 
+function dotProduct(d1: Float32Array, d2: Float32Array): number {
+  let sum = 0;
+  for (let i = 0; i < d1.length; i++) sum += d1[i] * d2[i];
+  return sum;
+}
+
+function cosineDistance(d1: Float32Array, d2: Float32Array): number {
+  // With L2-normalized descriptors: cosineSimilarity = dot(d1,d2)
+  const cosSimRaw = dotProduct(d1, d2);
+  const cosSim = Math.max(-1, Math.min(1, cosSimRaw));
+  return 1 - cosSim;
+}
+
 function l2Normalize(d: Float32Array): Float32Array {
   let norm = 0;
   for (let i = 0; i < d.length; i++) norm += d[i] * d[i];
   norm = Math.sqrt(norm);
-  if (norm === 0) return d;
-  for (let i = 0; i < d.length; i++) d[i] = d[i] / norm;
-  return d;
+  if (!norm) return d;
+  const out = new Float32Array(d.length);
+  for (let i = 0; i < d.length; i++) out[i] = d[i] / norm;
+  return out;
 }
 
 function serializeDescriptor(descriptor: Float32Array | number[]): number[] {
@@ -61,270 +114,261 @@ function deserializeDescriptor(data: any): Float32Array | null {
   return l2Normalize(new Float32Array(data));
 }
 
-type MatchDecisionReason = 'matched' | 'threshold' | 'ambiguous' | 'no_candidates';
-
 type MatchResult = {
   label: string;
   distance: number | null;
-  candidate?: string;
   secondCandidate?: string;
   secondDistance?: number | null;
   margin?: number | null;
-  reason?: MatchDecisionReason;
+  reason?: 'matched' | 'threshold' | 'ambiguous' | 'no_candidates';
   confidence?: number;
 };
 
-/**
- * Match a 512D face descriptor against all known users.
- * Contains safety check for mixed 128D/512D arrays.
- */
-function findBestMatchWithMargin(descriptor: Float32Array, knownUsers: any[]): MatchResult {
-  const allMatches: any[] = [];
+function parseUserId(label: string): number | null {
+  try { return Number(JSON.parse(label).id); } catch { return null; }
+}
 
-  for (const labeledDescriptors of knownUsers) {
-    let minDistance = Infinity;
-    const distances: number[] = [];
+function findBestMatchWithMargin(descriptor: Float32Array, knownUsers: any[], isForcedRescan = false): MatchResult {
+  const isLocalFaceApi = descriptor.length === 128;
+  const FACE_MATCH_THRESHOLD = isLocalFaceApi ? 0.90 : Number(process.env.FACE_MATCH_THRESHOLD || 0.58);
+  const FACE_AUTO_TAG_THRESHOLD = isForcedRescan
+    ? FACE_MATCH_THRESHOLD
+    : (isLocalFaceApi ? 0.94 : Number(process.env.FACE_AUTO_TAG_THRESHOLD || 0.68));
 
-    for (const reference of labeledDescriptors.descriptors) {
-      const refArray = new Float32Array(reference);
+  const matches: Array<{ label: string; similarity: number; distance: number }> = [];
 
-      // Safety Check: Old Database vs New AI
-      if (descriptor.length !== refArray.length) {
-        console.warn(`[AI] Size mismatch! Old DB uses ${refArray.length}D vectors. The new AI uses ${descriptor.length}D. You must clear old tags.`);
-        continue;
+  for (const user of knownUsers) {
+    let maxSimilarity = -1;
+    let minDistance = 2;
+
+    for (const ref of user.descriptors || []) {
+      const arr = new Float32Array(ref);
+      if (arr.length !== descriptor.length) continue;
+      const dist = cosineDistance(descriptor, arr);
+      const sim = 1 - dist;
+      if (sim > maxSimilarity) {
+        maxSimilarity = sim;
+        minDistance = dist;
       }
-
-      const d = euclideanDistance(descriptor, refArray);
-      distances.push(d);
-      if (d < minDistance) minDistance = d;
     }
 
-    if (minDistance !== Infinity) {
-      let rankingDistance = minDistance;
-      let supportCount = 1;
-      if (USE_MATCHER_V2 && distances.length > 0) {
-        const sortedDistances = [...distances].sort((a, b) => a - b);
-        const topK = sortedDistances.slice(0, Math.min(MATCH_CONFIG.robustTopK, sortedDistances.length));
-        rankingDistance = topK.reduce((sum, v) => sum + v, 0) / topK.length;
-        supportCount = distances.filter((d) => d <= MATCH_CONFIG.robustNearThreshold).length;
-      }
+    if (maxSimilarity === -1) continue;
 
-      allMatches.push({
-        label: labeledDescriptors.label,
-        distance: rankingDistance,
-        minDistance,
-        supportCount,
-      });
+    matches.push({ label: user.label, similarity: maxSimilarity, distance: minDistance });
+  }
+
+  matches.sort((a, b) => b.similarity - a.similarity);
+  const best = matches[0];
+  const second = matches[1];
+
+  if (!best) {
+    return { label: 'unknown', distance: null, reason: 'no_candidates', confidence: 0 };
+  }
+
+  const margin = second ? best.similarity - second.similarity : null;
+  const bestSimilarity = best.similarity;
+  const faceId = `face_${Math.round(Math.abs(descriptor[0] * 100000))}`;
+
+  let decision: 'AUTO_TAG' | 'POSSIBLE_MATCH' | 'UNKNOWN' = 'UNKNOWN';
+  let finalLabel = 'unknown';
+  let reason: 'matched' | 'threshold' | 'ambiguous' | 'no_candidates' = 'threshold';
+
+  const marginThreshold = isLocalFaceApi ? 0.04 : Number(process.env.FACE_MARGIN_THRESHOLD || 0.04);
+
+  if (bestSimilarity >= FACE_AUTO_TAG_THRESHOLD) {
+    if (margin !== null && margin < marginThreshold) {
+      decision = bestSimilarity >= FACE_MATCH_THRESHOLD ? 'POSSIBLE_MATCH' : 'UNKNOWN';
+      finalLabel = 'unknown';
+      reason = 'ambiguous';
+    } else {
+      decision = 'AUTO_TAG';
+      finalLabel = best.label;
+      reason = 'matched';
     }
-  }
-
-  const sorted = allMatches.sort((a, b) => a.distance - b.distance);
-  const best = sorted[0];
-  const second = sorted[1];
-
-  if (!best) return { label: 'unknown', distance: null, reason: 'no_candidates' };
-
-  // AI DEBUG: Log the distance scale
-  if (best.distance > 2.0 || best.distance < 0) {
-    console.log(`[AI DEBUG] ⚠️  Unusual distance detected: ${best.distance.toFixed(4)}. Target dim: ${descriptor.length}, Candidate: ${best.label}`);
-  }
-
-  // Hard threshold
-  if (best.distance > MATCH_THRESHOLD) {
-    console.log(`[AI] ❌ No match. Best=${best.label} dist=${best.distance?.toFixed(2)} > threshold=${MATCH_THRESHOLD}`);
-    return {
-      label: 'unknown',
-      distance: best.distance,
-      candidate: best.label,
-      secondCandidate: second?.label,
-      secondDistance: second?.distance ?? null,
-      margin: second ? (second.distance - best.distance) : null,
-      reason: 'threshold',
-      confidence: 0,
-    };
-  }
-
-  if (USE_MATCHER_V2) {
-    const hasEnoughDescriptors = knownUsers.find((u: any) => u.label === best.label)?.descriptors?.length >= 3;
-    if (hasEnoughDescriptors && best.supportCount < MATCH_CONFIG.robustMinSupport) {
-      console.log(`[AI] ⚠️ Weak support: ${best.label} has support=${best.supportCount} (<${MATCH_CONFIG.robustMinSupport}) — unknown`);
-      return {
-        label: 'unknown',
-        distance: best.distance,
-        candidate: best.label,
-        secondCandidate: second?.label,
-        secondDistance: second?.distance ?? null,
-        margin: second ? (second.distance - best.distance) : null,
-        reason: 'ambiguous',
-        confidence: _calculateConfidence(best.distance, second ? (second.distance - best.distance) : null, best.supportCount),
-      };
-    }
-  }
-
-  if (USE_MATCHER_V2 && sorted.length > 1) {
-    const margin = second.distance - best.distance;
-    if (margin < MATCH_CONFIG.ambiguityMargin && best.distance > MATCH_CONFIG.confidentThreshold) {
-      console.log(`[AI] ⚠️ Ambiguous: ${best.label}(${best.distance?.toFixed(2)}) vs ${second.label}(${second.distance?.toFixed(2)}) — unknown`);
-      return {
-        label: 'unknown',
-        distance: best.distance,
-        candidate: best.label,
-        secondCandidate: second.label,
-        secondDistance: second.distance,
-        margin,
-        reason: 'ambiguous',
-        confidence: _calculateConfidence(best.distance, margin, best.supportCount),
-      };
-    }
-  }
-
-  const margin = second ? (second.distance - best.distance) : null;
-  const confidence = _calculateConfidence(best.distance, margin, best.supportCount);
-
-  if (best.distance < MATCH_THRESHOLD) {
-    console.log(`[AI] ✅ Match → ${best.label} dist=${best.distance?.toFixed(2)} confidence=${confidence}%`);
+  } else if (bestSimilarity >= FACE_MATCH_THRESHOLD) {
+    decision = 'POSSIBLE_MATCH';
+    finalLabel = 'unknown';
+    reason = margin !== null && margin < marginThreshold ? 'ambiguous' : 'threshold';
   } else {
-    console.log(`[AI] ❓ Unknown → best candidate was ${best.label} but dist=${best.distance?.toFixed(2)} > ${MATCH_THRESHOLD}`);
+    decision = 'UNKNOWN';
+    finalLabel = 'unknown';
+    reason = 'threshold';
   }
+
+  const bestUserLabel = best ? best.label : 'none';
+  const secondUserLabel = second ? second.label : 'none';
+  console.log(`[Face Recognition] 🔍 faceId: ${faceId}, bestUser: ${bestUserLabel}, secondUser: ${secondUserLabel}, similarity: ${bestSimilarity.toFixed(4)}, margin: ${margin !== null ? margin.toFixed(4) : 'none'}, threshold: ${FACE_AUTO_TAG_THRESHOLD}, decision: ${decision}`);
+
   return {
-    label: best.label,
+    label: finalLabel,
     distance: best.distance,
     secondCandidate: second?.label,
     secondDistance: second?.distance ?? null,
     margin,
-    reason: 'matched',
-    confidence,
+    reason: reason,
+    confidence: Math.round(bestSimilarity * 100),
   };
 }
 
-function _calculateConfidence(distance: number, margin: number | null, supportCount: number): number {
-  // Nonlinear confidence scaling to reach 90-95% for solid matches
-  // A distance of 0.45 or less is considered a very strong match in InsightFace
-  const normalizedDist = distance / MATCH_THRESHOLD;
-  
-  // Exponential decay curve: stays high for good matches, drops near threshold
-  // confidence = 100 * exp(-2.5 * (dist/threshold)^2)
-  let confidence = 100 * Math.exp(-2.5 * Math.pow(normalizedDist, 2));
-
-  // Support boost: if multiple embeddings confirm the match, boost confidence
-  if (margin !== null && margin < MATCH_CONFIG.ambiguityMargin) {
-    const marginPenalty = 1 - (margin / MATCH_CONFIG.ambiguityMargin);
-    confidence *= (1 - 0.3 * marginPenalty); // Max 30% reduction for ambiguity
-  }
-
-  // Support boost: if multiple embeddings confirm the match, boost confidence
-  if (supportCount > 1) {
-    confidence += (supportCount - 1) * 5; // +5% per supporting embedding
-  }
-
-  return Math.round(Math.max(0, Math.min(100, confidence)));
+async function loadImageCanvas(imagePath: string): Promise<any> {
+  await loadModels();
+  return canvas.loadImage(imagePath);
 }
 
-/**
- * Calls the Python Microservice for a SINGLE image.
- */
-async function fetchFacesFromPython(imagePath: string): Promise<any> {
-  try {
-    const fileBuffer = fs.readFileSync(imagePath);
-    const blob = new Blob([fileBuffer], { type: 'image/jpeg' });
-    const formData = new FormData();
-    formData.append('file', blob, path.basename(imagePath));
-
-    const res = await fetch(AI_API_URL, {
-      method: 'POST',
-      body: formData
-    });
-
-    if (!res.ok) {
-      console.error(`[AI Engine] Error response from Python API: ${res.statusText}`);
-      return { faces: [], metadata: {} };
-    }
-
-    const data: any = await res.json();
-    return data;
-  } catch (err: any) {
-    if (err.cause && err.cause.code === 'ECONNREFUSED') {
-      console.error(`\n🚨 [CRITICAL AI ERROR] Could not reach the Python Background AI at ${AI_API_URL}.`);
-      console.error(`🚨 Please make sure you have run 'python main.py' inside the 'ai_service' folder!\n`);
-    } else {
-      console.error('[AI Engine] Failed to fetch faces from microservice:', err.message);
-    }
-    return [];
-  }
+function buildMetadata(img: any, count: number) {
+  const width = (img as any).width || 0;
+  const height = (img as any).height || 0;
+  return {
+    person_count: count,
+    aspect_ratio: height ? Number((width / height).toFixed(2)) : 1,
+    orientation: width > height ? 'landscape' : 'portrait',
+  };
 }
 
-/**
- * Calls the Python Microservice for a BATCH of images simultaneously.
- * Sends up to `imagePaths.length` images in a single multipart POST.
- * Returns results in the same order as the input paths.
- *
- * Falls back to sequential single-image requests if the batch endpoint is
- * unavailable (e.g. older Python service version).
- */
-async function fetchFacesFromPythonBatch(imagePaths: string[]): Promise<any[]> {
-  if (imagePaths.length === 0) return [];
-  if (imagePaths.length === 1) {
-    const data = await fetchFacesFromPython(imagePaths[0]);
-    return [data];
-  }
-
-  try {
-    const formData = new FormData();
-    for (const imgPath of imagePaths) {
-      const fileBuffer = fs.readFileSync(imgPath);
-      const blob = new Blob([fileBuffer], { type: 'image/jpeg' });
-      formData.append('files', blob, path.basename(imgPath));
-    }
-
-    const res = await fetch(AI_BATCH_URL, {
-      method: 'POST',
-      body: formData,
-    });
-
-    if (!res.ok) {
-      throw new Error(`Batch endpoint returned ${res.status}: ${res.statusText}`);
-    }
-
-    const batchResults = (await res.json()) as any[];
-    return batchResults;
-  } catch (err: any) {
-    console.warn('[AI Engine] Batch endpoint failed, falling back to sequential:', err.message);
-    // Graceful fallback: run sequentially
-    const results: any[] = [];
-    for (const imgPath of imagePaths) {
-      results.push(await fetchFacesFromPython(imgPath));
-    }
-    return results;
-  }
+function boxArea(b: { _width: number; _height: number }): number {
+  return Math.max(0, b._width) * Math.max(0, b._height);
 }
 
-/**
- * Get the single best/largest face descriptor from an image (for profile pictures).
- */
+function iou(a: any, b: any): number {
+  const ax2 = a._x + a._width;
+  const ay2 = a._y + a._height;
+  const bx2 = b._x + b._width;
+  const by2 = b._y + b._height;
+
+  const ix1 = Math.max(a._x, b._x);
+  const iy1 = Math.max(a._y, b._y);
+  const ix2 = Math.min(ax2, bx2);
+  const iy2 = Math.min(ay2, by2);
+  const iw = Math.max(0, ix2 - ix1);
+  const ih = Math.max(0, iy2 - iy1);
+  const inter = iw * ih;
+  if (inter <= 0) return 0;
+  return inter / (boxArea(a) + boxArea(b) - inter);
+}
+
+function dedupeByIoU<T extends { box: any }>(faces: T[], threshold = 0.4): T[] {
+  const sorted = [...faces].sort((a, b) => boxArea(b.box) - boxArea(a.box));
+  const kept: T[] = [];
+  for (const f of sorted) {
+    if (f.box._width < GROUP_MIN_FACE_SIZE || f.box._height < GROUP_MIN_FACE_SIZE) continue;
+    const overlaps = kept.some((k) => iou(k.box, f.box) >= threshold);
+    if (!overlaps) kept.push(f);
+  }
+  return kept;
+}
+
+async function runTinyPasses(image: any) {
+  const options = [
+    new faceapi.TinyFaceDetectorOptions({ inputSize: 800, scoreThreshold: 0.35 }),
+    new faceapi.TinyFaceDetectorOptions({ inputSize: 608, scoreThreshold: 0.3 }),
+    new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.25 }),
+    new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.2 }),
+  ];
+
+  const all: faceapi.WithFaceDescriptor<
+    faceapi.WithFaceLandmarks<{ detection: faceapi.FaceDetection }, faceapi.FaceLandmarks68>
+  >[] = [];
+
+  for (const opt of options) {
+    const pass = await faceapi
+      .detectAllFaces(image, opt)
+      .withFaceLandmarks(true)
+      .withFaceDescriptors();
+    all.push(...pass);
+  }
+  return all;
+}
+
+async function runSsdFallback(image: any) {
+  if (!hasSsdFallback) return [];
+  return faceapi
+    .detectAllFaces(image, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.2, maxResults: 150 }))
+    .withFaceLandmarks(true)
+    .withFaceDescriptors();
+}
+
+async function detectWithDescriptors(imagePath: string) {
+  const { buffer, scaleX, scaleY } = await getOptimizedImageBuffer(imagePath);
+  const blob = new Blob([buffer], { type: 'image/jpeg' });
+  const formData = new FormData();
+  formData.append('file', blob, path.basename(imagePath));
+
+  const baseUrl = process.env.FACE_AI_BASE_URL || 'http://localhost:8000';
+  let res: any = null;
+  const attempts = 3;
+
+  for (let i = 0; i < attempts; i++) {
+    try {
+      res = await fetch(`${baseUrl}/extract_faces`, {
+        method: 'POST',
+        body: formData,
+      });
+      if (res && res.ok) break;
+    } catch (err: any) {
+      if (i === attempts - 1) {
+        console.warn('[Face AI] Python AI Service failed, falling back to local face-api:', err.message);
+      } else {
+        console.log(`[Face AI] Connection to Python AI Service busy or booting, retrying in 1.5s... (Attempt ${i + 1}/${attempts})`);
+        await new Promise(resolve => setTimeout(resolve, 1500));
+      }
+    }
+  }
+
+  if (res && res.ok) {
+    try {
+      const data = await res.json() as any;
+      if (data && Array.isArray(data.faces)) {
+        const faces = data.faces.map((f: any) => ({
+          descriptor: l2Normalize(new Float32Array(f.descriptor)),
+          box: {
+            _x: Math.round(f.box._x * scaleX),
+            _y: Math.round(f.box._y * scaleY),
+            _width: Math.round(f.box._width * scaleX),
+            _height: Math.round(f.box._height * scaleY),
+          },
+        }));
+        return { faces, metadata: data.metadata };
+      }
+    } catch (jsonErr: any) {
+      console.warn('[Face AI] Failed to parse Python AI response:', jsonErr.message);
+    }
+  }
+
+  const image = await loadImageCanvas(imagePath);
+  const imageWidth = (image as any).width || 0;
+  const imageHeight = (image as any).height || 0;
+  const imageArea = imageWidth * imageHeight;
+
+  const tinyDetections = await runTinyPasses(image);
+  // For large group photos, run SSD fallback even when tiny finds some faces.
+  const shouldRunSsd =
+    tinyDetections.length <= 6 ||
+    imageArea >= 1280 * 720 ||
+    (imageWidth >= 1200 || imageHeight >= 1200);
+  const ssdDetections = shouldRunSsd ? await runSsdFallback(image) : [];
+  const detections = [...tinyDetections, ...ssdDetections];
+
+  const merged = detections.map((d) => ({
+    descriptor: l2Normalize(new Float32Array(d.descriptor)),
+    box: {
+      _x: Math.round(d.detection.box.x),
+      _y: Math.round(d.detection.box.y),
+      _width: Math.round(d.detection.box.width),
+      _height: Math.round(d.detection.box.height),
+    },
+  }));
+  const faces = dedupeByIoU(merged, 0.4);
+
+  return { faces, metadata: buildMetadata(image, faces.length) };
+}
+
 async function getFaceDescriptor(imagePath: string): Promise<Float32Array | null> {
-  const data = await fetchFacesFromPython(imagePath);
-  const faces = data.faces || [];
-  if (!faces || faces.length === 0) return null;
-
-  // Pick the most prominent VALID face by area size
-  const best = faces.reduce((prev: any, cur: any) => {
-    // If we have a valid face, prefer it. If not, we might fall back to any face for profile pictures
-    // as long as it's the most prominent one.
-    const is_valid = cur.quality && cur.quality.is_valid;
-    
-    const area = cur.box._width * cur.box._height;
-    if (!prev) return { det: cur, area, is_valid };
-    
-    // Primary criteria: Is it a "valid" clear face?
-    if (is_valid && !prev.is_valid) return { det: cur, area, is_valid };
-    if (!is_valid && prev.is_valid) return prev;
-    
-    // Secondary criteria: Size
-    return area > prev.area ? { det: cur, area, is_valid } : prev;
-  }, null);
-
-  if (!best || !best.det || !best.det.descriptor) return null;
-  return l2Normalize(new Float32Array(best.det.descriptor));
+  const data = await detectWithDescriptors(imagePath);
+  if (!data.faces.length) return null;
+  const best = data.faces.reduce((acc: any, cur: any) =>
+    cur.box._width * cur.box._height > acc.box._width * acc.box._height ? cur : acc,
+  );
+  return best.descriptor;
 }
 
 async function identifyFace(targetImagePath: string, knownUsers: any[]) {
@@ -334,17 +378,10 @@ async function identifyFace(targetImagePath: string, knownUsers: any[]) {
   return best.label === 'unknown' ? null : best;
 }
 
-/**
- * Detect & identify ALL faces in an image
- */
 async function identifyAllFaces(targetImagePath: string, knownUsers: any[]) {
-  const data = await fetchFacesFromPython(targetImagePath);
-  const faces = data.faces || [];
-  if (!faces || faces.length === 0) return [];
-
-  return faces.map((d: any) => {
-    const floatDescriptor = l2Normalize(new Float32Array(d.descriptor));
-    const match = findBestMatchWithMargin(floatDescriptor, knownUsers);
+  const data = await detectWithDescriptors(targetImagePath);
+  return data.faces.map((d: any) => {
+    const match = findBestMatchWithMargin(d.descriptor, knownUsers);
     return {
       label: match.label,
       distance: match.distance != null ? Number(match.distance.toFixed(4)) : null,
@@ -357,95 +394,75 @@ async function identifyAllFaces(targetImagePath: string, knownUsers: any[]) {
   });
 }
 
-/**
- * Instant recognition for upload - gets top suggestions per face with confidence
- */
 async function getFaceSuggestions(targetImagePath: string, knownUsers: any[]): Promise<any[]> {
-  const data = await fetchFacesFromPython(targetImagePath);
-  const faces = data.faces || [];
-  if (!faces || faces.length === 0) return [];
-
-  return faces.map((d: any) => {
-    const floatDescriptor = l2Normalize(new Float32Array(d.descriptor));
-    const match = findBestMatchWithMargin(floatDescriptor, knownUsers);
-
-    const suggestions: any[] = [];
-    if (match.label !== 'unknown') {
-      suggestions.push({
-        label: match.label,
-        confidence: match.confidence ?? 0,
-        distance: match.distance != null ? Number(match.distance.toFixed(4)) : null,
-      });
-    }
-    if (match.secondCandidate && match.secondDistance !== null && match.margin !== null) {
-      const marginValue = match.margin ?? 0;
-      suggestions.push({
-        label: match.secondCandidate,
-        confidence: Math.max(0, (match.confidence ?? 0) - Math.round((marginValue / MATCH_CONFIG.ambiguityMargin) * 30)),
-        distance: match.secondDistance,
-      });
-    }
-
-    return {
-      box: d.box,
-      confidence: match.confidence ?? 0,
-      isConfident: (match.confidence ?? 0) >= 90 && match.reason === 'matched',
-      topSuggestion: suggestions[0] || null,
-      allSuggestions: suggestions.slice(0, 3),
-      label: match.label,
-      reason: match.reason || null,
-    };
-  });
+  const faces = await identifyAllFaces(targetImagePath, knownUsers);
+  return faces.map((face: any) => ({
+    box: face.box,
+    confidence: face.confidence ?? 0,
+    isConfident: (face.confidence ?? 0) >= 85 && face.label !== 'unknown',
+    topSuggestion: face.label !== 'unknown' ? {
+      label: face.label,
+      confidence: face.confidence ?? 0,
+      distance: face.distance,
+    } : null,
+    allSuggestions: face.label !== 'unknown' ? [{
+      label: face.label,
+      confidence: face.confidence ?? 0,
+      distance: face.distance,
+    }] : [],
+    label: face.label,
+    reason: face.reason ?? null,
+  }));
 }
 
-/**
- * Just return all descriptor arrays.
- */
 async function getAllDescriptors(imagePath: string): Promise<Float32Array[]> {
-  const data = await fetchFacesFromPython(imagePath);
-  const faces = data.faces || [];
-  return faces.map((d: any) => l2Normalize(new Float32Array(d.descriptor)));
+  const data = await detectWithDescriptors(imagePath);
+  return data.faces.map((f: any) => f.descriptor);
 }
 
-/**
- * Core function for bulk gallery scanning — single image.
- */
 async function detectFaces(imagePath: string) {
-  const data = await fetchFacesFromPython(imagePath);
-  const faces = data.faces || [];
-
-  const filename = path.basename(imagePath);
-  console.log(`[detectFaces] ${filename}: Python Engine found ${faces.length} high-quality face(s)`);
-
-  return {
-    faces: faces.map((d: any) => ({
-      descriptor: l2Normalize(new Float32Array(d.descriptor)),
-      box: d.box,
-    })),
-    metadata: data.metadata || {}
-  };
+  return detectWithDescriptors(imagePath);
 }
 
-/**
- * Core function for bulk gallery scanning — PARALLEL BATCH.
- * Sends multiple images to Python in ONE request and processes them in parallel.
- * Returns results in same order as imagePaths.
- */
 async function detectFacesBatch(imagePaths: string[]): Promise<Array<{ faces: Array<{ descriptor: Float32Array; box: any }>; metadata: any }>> {
-  const rawResults = await fetchFacesFromPythonBatch(imagePaths);
+  return Promise.all(imagePaths.map((p) => detectWithDescriptors(p)));
+}
 
-  return rawResults.map((data: any, idx: any) => {
-    const filename = path.basename(imagePaths[idx]);
-    const faces = data.faces || [];
-    console.log(`[detectFacesBatch] ${filename}: ${faces.length} face(s) found`);
-    return {
-      faces: faces.map((d: any) => ({
-        descriptor: l2Normalize(new Float32Array(d.descriptor)),
-        box: d.box,
-      })),
-      metadata: data.metadata || {}
-    };
-  });
+async function extractMetadata(imagePath: string): Promise<any> {
+  const { buffer, scaleX, scaleY } = await getOptimizedImageBuffer(imagePath);
+  const blob = new Blob([buffer], { type: 'image/jpeg' });
+  const formData = new FormData();
+  formData.append('file', blob, path.basename(imagePath));
+
+  const baseUrl = process.env.FACE_AI_BASE_URL || 'http://localhost:8000';
+
+  try {
+    const res = await fetch(`${baseUrl}/extract_metadata`, {
+      method: 'POST',
+      body: formData,
+    });
+    if (res && res.ok) {
+      const data = (await res.json()) as any;
+      // Scale object bounding boxes back to original frame coordinates
+      if (data && Array.isArray(data.objects) && scaleX && scaleY) {
+        data.objects = data.objects.map((o: any) => {
+          if (o.bbox && Array.isArray(o.bbox) && o.bbox.length === 4) {
+            o.bbox = [
+              Math.round(o.bbox[0] * scaleX),
+              Math.round(o.bbox[1] * scaleY),
+              Math.round(o.bbox[2] * scaleX),
+              Math.round(o.bbox[3] * scaleY),
+            ];
+          }
+          return o;
+        });
+      }
+      return data;
+    }
+  } catch (err: any) {
+    console.warn('[AI Metadata] Failed to call Python AI metadata service:', err.message);
+  }
+  return { objects: [], ocrText: [], scenes: [] };
 }
 
 export default {
@@ -455,6 +472,7 @@ export default {
   getAllDescriptors,
   detectFaces,
   detectFacesBatch,
+  extractMetadata,
   getFaceSuggestions,
   serializeDescriptor,
   deserializeDescriptor,
@@ -462,4 +480,5 @@ export default {
   loadModels,
   MATCH_THRESHOLD,
   euclideanDistance,
+  cosineDistance,
 };

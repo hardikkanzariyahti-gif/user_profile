@@ -18,6 +18,21 @@ const galleryController = {
     res.json(item);
   },
 
+  async getStatus(req: Request, res: Response) {
+    const id = Number(req.params.id);
+    if (!id || isNaN(id)) {
+      res.status(400).json({ error: 'Valid gallery id is required.' });
+      return;
+    }
+    const item = await galleryService.getGalleryItem(id) as any;
+    // Removed status debug spamming to scale console for 1000+ photos
+    res.json({
+      ...item,
+      imageId: item.id,
+      scanStatus: item.scanStatus || 'pending',
+    });
+  },
+
   async remove(req: Request, res: Response) {
     const id = Number(req.params.id);
     if (!id || isNaN(id)) {
@@ -36,6 +51,18 @@ const galleryController = {
     }
     const hashtags = req.body?.hashtags ?? req.body?.tags ?? req.body;
     const item = await galleryService.setGalleryItemHashtags(id, hashtags);
+    res.json(item);
+  },
+
+  async setCustomMetadata(req: Request, res: Response) {
+    const id = Number(req.params.id);
+    if (!id || isNaN(id)) {
+      res.status(400).json({ error: 'Valid gallery id is required.' });
+      return;
+    }
+    const customLocation = String(req.body?.customLocation ?? '');
+    const customEvent = String(req.body?.customEvent ?? '');
+    const item = await galleryService.setGalleryItemCustomMetadata(id, customLocation, customEvent);
     res.json(item);
   },
 
@@ -67,7 +94,53 @@ const galleryController = {
   },
 
   async syncStatus(req: Request, res: Response) {
+    // If Redis queue is enabled, status may be maintained by workers.
+    try {
+      const { getRedis } = await import('../queues/redis');
+      const { getSyncState } = await import('../queues/syncStateStore');
+      const redis = getRedis();
+      if (redis) {
+        const state = await getSyncState(redis);
+        res.json(state);
+        return;
+      }
+    } catch { }
     res.json(galleryService.syncState);
+  },
+
+  async syncEvents(req: Request, res: Response) {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    // Helps if behind proxies.
+    res.setHeader('X-Accel-Buffering', 'no');
+
+    const send = (payload: any) => {
+      res.write(`event: sync\n`);
+      res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    };
+
+    const getState = async () => {
+      try {
+        const { getRedis } = await import('../queues/redis');
+        const { getSyncState } = await import('../queues/syncStateStore');
+        const redis = getRedis();
+        if (redis) return await getSyncState(redis);
+      } catch { }
+      return galleryService.syncState;
+    };
+
+    // Send current state immediately.
+    send(await getState());
+
+    const interval = setInterval(() => {
+      void getState().then(send);
+    }, 1000);
+
+    req.on('close', () => {
+      clearInterval(interval);
+      res.end();
+    });
   },
 
   async tagFace(req: Request, res: Response) {
@@ -151,6 +224,12 @@ const galleryController = {
     res.json(hashtags);
   },
 
+  async getSuggestions(req: Request, res: Response) {
+    const q = String(req.query.q || '');
+    const suggestions = await galleryService.getSearchSuggestions(q);
+    res.json(suggestions);
+  },
+
   async forceScan(req: Request, res: Response) {
     const id = Number(req.params.id);
     if (!id || isNaN(id)) {
@@ -159,6 +238,31 @@ const galleryController = {
     }
     const result = await galleryService.forceScanItem(id);
     res.json(result);
+  },
+
+  async metadataRetry(req: Request, res: Response) {
+    const id = Number(req.params.id);
+    if (!id || isNaN(id)) {
+      res.status(400).json({ error: 'Valid gallery id is required.' });
+      return;
+    }
+    // Use unified process pipeline passing forceScan=false, forceMeta=true (Requirement 7)
+    galleryService.processGalleryImage(id, false, true).catch(err => console.error('[Retry Fail]', err));
+    res.json({ success: true, message: 'Integrated metadata extraction cycle initialized.' });
+  },
+
+  async backfillMetadata(req: Request, res: Response) {
+    const force = req.body?.force === true;
+    console.log(`[Backfill API] POST /metadata/backfill — force=${force}`);
+    const result = await galleryService.backfillMissingMetadata(force);
+    // 202 = accepted / running, 200 = already done/nothing to do
+    const status = (result as any).running ? 202 : 200;
+    res.status(status).json(result);
+  },
+
+  async getBackfillStatus(req: Request, res: Response) {
+    const status = galleryService.getBackfillStatus();
+    res.json(status);
   },
 
 };

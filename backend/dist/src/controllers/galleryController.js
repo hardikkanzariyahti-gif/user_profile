@@ -1,9 +1,43 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", { value: true });
 const galleryService_1 = require("../services/galleryService");
 const galleryController = {
     async list(req, res) {
-        const gallery = await galleryService_1.galleryService.listGallery(req.query.userId);
+        const search = String(req.query.search || '');
+        const gallery = await galleryService_1.galleryService.listGallery(req.query.userId, search);
         res.json(gallery);
     },
     async getById(req, res) {
@@ -14,6 +48,20 @@ const galleryController = {
         }
         const item = await galleryService_1.galleryService.getGalleryItem(id);
         res.json(item);
+    },
+    async getStatus(req, res) {
+        const id = Number(req.params.id);
+        if (!id || isNaN(id)) {
+            res.status(400).json({ error: 'Valid gallery id is required.' });
+            return;
+        }
+        const item = await galleryService_1.galleryService.getGalleryItem(id);
+        // Removed status debug spamming to scale console for 1000+ photos
+        res.json({
+            ...item,
+            imageId: item.id,
+            scanStatus: item.scanStatus || 'pending',
+        });
     },
     async remove(req, res) {
         const id = Number(req.params.id);
@@ -32,6 +80,17 @@ const galleryController = {
         }
         const hashtags = req.body?.hashtags ?? req.body?.tags ?? req.body;
         const item = await galleryService_1.galleryService.setGalleryItemHashtags(id, hashtags);
+        res.json(item);
+    },
+    async setCustomMetadata(req, res) {
+        const id = Number(req.params.id);
+        if (!id || isNaN(id)) {
+            res.status(400).json({ error: 'Valid gallery id is required.' });
+            return;
+        }
+        const customLocation = String(req.body?.customLocation ?? '');
+        const customEvent = String(req.body?.customEvent ?? '');
+        const item = await galleryService_1.galleryService.setGalleryItemCustomMetadata(id, customLocation, customEvent);
         res.json(item);
     },
     async searchByHashtag(req, res) {
@@ -57,7 +116,50 @@ const galleryController = {
         res.status(202).json({ message: 'Background sync started', status: galleryService_1.galleryService.syncState });
     },
     async syncStatus(req, res) {
+        // If Redis queue is enabled, status may be maintained by workers.
+        try {
+            const { getRedis } = await Promise.resolve().then(() => __importStar(require('../queues/redis')));
+            const { getSyncState } = await Promise.resolve().then(() => __importStar(require('../queues/syncStateStore')));
+            const redis = getRedis();
+            if (redis) {
+                const state = await getSyncState(redis);
+                res.json(state);
+                return;
+            }
+        }
+        catch { }
         res.json(galleryService_1.galleryService.syncState);
+    },
+    async syncEvents(req, res) {
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.setHeader('Cache-Control', 'no-cache, no-transform');
+        res.setHeader('Connection', 'keep-alive');
+        // Helps if behind proxies.
+        res.setHeader('X-Accel-Buffering', 'no');
+        const send = (payload) => {
+            res.write(`event: sync\n`);
+            res.write(`data: ${JSON.stringify(payload)}\n\n`);
+        };
+        const getState = async () => {
+            try {
+                const { getRedis } = await Promise.resolve().then(() => __importStar(require('../queues/redis')));
+                const { getSyncState } = await Promise.resolve().then(() => __importStar(require('../queues/syncStateStore')));
+                const redis = getRedis();
+                if (redis)
+                    return await getSyncState(redis);
+            }
+            catch { }
+            return galleryService_1.galleryService.syncState;
+        };
+        // Send current state immediately.
+        send(await getState());
+        const interval = setInterval(() => {
+            void getState().then(send);
+        }, 1000);
+        req.on('close', () => {
+            clearInterval(interval);
+            res.end();
+        });
     },
     async tagFace(req, res) {
         const galleryItemId = Number(req.body.galleryItemId);
@@ -126,6 +228,46 @@ const galleryController = {
         }
         const suggestions = await galleryService_1.galleryService.getTagSuggestions(id);
         res.json(suggestions);
+    },
+    async getAllHashtags(req, res) {
+        const hashtags = await galleryService_1.galleryService.getAllHashtags();
+        res.json(hashtags);
+    },
+    async getSuggestions(req, res) {
+        const q = String(req.query.q || '');
+        const suggestions = await galleryService_1.galleryService.getSearchSuggestions(q);
+        res.json(suggestions);
+    },
+    async forceScan(req, res) {
+        const id = Number(req.params.id);
+        if (!id || isNaN(id)) {
+            res.status(400).json({ error: 'Valid gallery id is required.' });
+            return;
+        }
+        const result = await galleryService_1.galleryService.forceScanItem(id);
+        res.json(result);
+    },
+    async metadataRetry(req, res) {
+        const id = Number(req.params.id);
+        if (!id || isNaN(id)) {
+            res.status(400).json({ error: 'Valid gallery id is required.' });
+            return;
+        }
+        // Use unified process pipeline passing forceScan=false, forceMeta=true (Requirement 7)
+        galleryService_1.galleryService.processGalleryImage(id, false, true).catch(err => console.error('[Retry Fail]', err));
+        res.json({ success: true, message: 'Integrated metadata extraction cycle initialized.' });
+    },
+    async backfillMetadata(req, res) {
+        const force = req.body?.force === true;
+        console.log(`[Backfill API] POST /metadata/backfill — force=${force}`);
+        const result = await galleryService_1.galleryService.backfillMissingMetadata(force);
+        // 202 = accepted / running, 200 = already done/nothing to do
+        const status = result.running ? 202 : 200;
+        res.status(status).json(result);
+    },
+    async getBackfillStatus(req, res) {
+        const status = galleryService_1.galleryService.getBackfillStatus();
+        res.json(status);
     },
 };
 exports.default = galleryController;
