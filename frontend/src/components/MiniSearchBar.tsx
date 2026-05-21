@@ -198,18 +198,18 @@ export const MiniSearchBar: React.FC = () => {
         }
         .search-icon {
           position: absolute;
-          left: 12px;
-          color: rgba(255,255,255,0.4);
+          left: 14px;
+          color: var(--text-muted);
           pointer-events: none;
         }
         .clear-search-btn {
           position: absolute;
-          right: 10px;
-          background: rgba(255,255,255,0.1);
+          right: 12px;
+          background: rgba(0,0,0,0.05);
           border: none;
-          color: rgba(255,255,255,0.6);
-          width: 20px;
-          height: 20px;
+          color: var(--text-muted);
+          width: 18px;
+          height: 18px;
           border-radius: 50%;
           display: flex;
           align-items: center;
@@ -219,36 +219,28 @@ export const MiniSearchBar: React.FC = () => {
           transition: all 0.2s;
         }
         .clear-search-btn:hover {
-          background: rgba(255,255,255,0.2);
-          color: white;
+          background: rgba(0,0,0,0.1);
+          color: var(--text-main);
         }
         .mini-search-input {
           width: 100%;
-          padding: 9px 36px 9px 36px;
-          border-radius: 999px;
-          border: 1px solid rgba(255,255,255,0.15);
-          background: rgba(0, 0, 0, 0.25);
-          backdrop-filter: blur(10px);
-          color: white;
-          font-size: 0.85rem;
+          height: 42px;
+          padding: 0 36px 0 38px;
+          border-radius: 99px;
+          border: 1px solid var(--border-color);
+          background: #f3f4f6;
+          color: var(--text-main);
+          font-size: 0.9rem;
           outline: none;
-          transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+          transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
         }
         .mini-search-input:focus {
-          background: rgba(0, 0, 0, 0.45);
+          background: white;
           border-color: var(--primary, #6366f1);
-          box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
-          width: 320px;
-          transform: translateX(-20px);
-        }
-        @media (max-width: 992px) {
-           .mini-search-input:focus {
-             width: 100%;
-             transform: none;
-           }
+          box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12);
         }
         .mini-search-input::placeholder {
-          color: rgba(255,255,255,0.4);
+          color: #9ca3af;
         }
         
         .search-dropdown {

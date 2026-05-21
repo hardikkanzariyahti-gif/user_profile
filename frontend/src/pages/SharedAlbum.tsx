@@ -77,7 +77,18 @@ const SharedAlbum: React.FC = () => {
                 boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.3)'
               }}
             >
-              <img src={item.url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              <img 
+                src={item.url} 
+                alt="" 
+                onError={(e) => {
+                  const target = e.currentTarget;
+                  const full = item.url;
+                  if (!target.src.startsWith('http') && full) {
+                    target.src = `http://localhost:4001${full}`;
+                  }
+                }}
+                style={{ width: '100%', height: '100%', objectFit: 'cover' }} 
+              />
             </motion.div>
           ))}
         </div>

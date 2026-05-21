@@ -32,6 +32,9 @@ var __importStar = (this && this.__importStar) || (function () {
         return result;
     };
 })();
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
@@ -39,6 +42,40 @@ const canvas = __importStar(require("canvas"));
 const faceapi = __importStar(require("@vladmandic/face-api"));
 const { Canvas, Image, ImageData } = canvas;
 faceapi.env.monkeyPatch({ Canvas, Image, ImageData });
+const sharp_1 = __importDefault(require("sharp"));
+async function getOptimizedImageBuffer(imagePath, options = {}) {
+    try {
+        const originalMeta = await (0, sharp_1.default)(imagePath).metadata();
+        const origW = originalMeta.width || 1;
+        const origH = originalMeta.height || 1;
+        if (options.useOriginal) {
+            const buffer = await (0, sharp_1.default)(imagePath).rotate().jpeg({ quality: 95 }).toBuffer();
+            return { buffer, scaleX: 1, scaleY: 1 };
+        }
+        let pipeline = (0, sharp_1.default)(imagePath).rotate();
+        if (options.applyContrast) {
+            pipeline = pipeline.clahe({ width: 8, height: 8, maxSlope: 2 });
+        }
+        const w = options.targetW || 1280;
+        const h = options.targetH || 1280;
+        pipeline = pipeline.resize({ width: w, height: h, fit: 'inside', withoutEnlargement: true });
+        const buffer = await pipeline.jpeg({ quality: 92 }).toBuffer();
+        const resizedMeta = await (0, sharp_1.default)(buffer).metadata();
+        const resW = resizedMeta.width || 1;
+        const resH = resizedMeta.height || 1;
+        // If sharp rotate() swapped dimensions based on orientation tag, map correctly (5-8 indicate transposed axes)
+        const isRotated = originalMeta.orientation && [5, 6, 7, 8].includes(originalMeta.orientation);
+        const effectiveOrigW = isRotated ? origH : origW;
+        const effectiveOrigH = isRotated ? origW : origH;
+        const scaleX = effectiveOrigW / resW;
+        const scaleY = effectiveOrigH / resH;
+        return { buffer, scaleX, scaleY };
+    }
+    catch (e) {
+        console.warn(`[Face AI] Sharp pre-resize failed for ${imagePath}, using fallback.`, e);
+        return { buffer: fs.readFileSync(imagePath), scaleX: 1, scaleY: 1 };
+    }
+}
 const MODEL_PATH = path.join(process.cwd(), 'models');
 // Cosine distance threshold (0 = perfect match, higher = worse match).
 // If your descriptors are L2-normalized (we do this), cosine similarity is dot-product,
@@ -261,9 +298,9 @@ async function runSsdFallback(image) {
         .withFaceLandmarks(true)
         .withFaceDescriptors();
 }
-async function detectWithDescriptors(imagePath) {
-    const fileBuffer = fs.readFileSync(imagePath);
-    const blob = new Blob([fileBuffer], { type: 'image/jpeg' });
+async function detectWithDescriptors(imagePath, options = {}) {
+    const { buffer, scaleX, scaleY } = await getOptimizedImageBuffer(imagePath, options);
+    const blob = new Blob([buffer], { type: 'image/jpeg' });
     const formData = new FormData();
     formData.append('file', blob, path.basename(imagePath));
     const baseUrl = process.env.FACE_AI_BASE_URL || 'http://localhost:8000';
@@ -293,13 +330,16 @@ async function detectWithDescriptors(imagePath) {
             const data = await res.json();
             if (data && Array.isArray(data.faces)) {
                 const faces = data.faces.map((f) => ({
-                    descriptor: l2Normalize(new Float32Array(f.descriptor)),
+                    descriptor: f.descriptor && f.descriptor.length > 0 ? l2Normalize(new Float32Array(f.descriptor)) : new Float32Array(0),
                     box: {
-                        _x: Math.round(f.box._x),
-                        _y: Math.round(f.box._y),
-                        _width: Math.round(f.box._width),
-                        _height: Math.round(f.box._height),
+                        _x: Math.round(f.box._x * scaleX),
+                        _y: Math.round(f.box._y * scaleY),
+                        _width: Math.round(f.box._width * scaleX),
+                        _height: Math.round(f.box._height * scaleY),
                     },
+                    confidence: f.confidence ?? 1.0,
+                    blur_score: f.blur_score ?? 10.0,
+                    quality: f.quality ?? { is_valid: true, reason: 'Clear' },
                 }));
                 return { faces, metadata: data.metadata };
             }
@@ -327,12 +367,15 @@ async function detectWithDescriptors(imagePath) {
             _width: Math.round(d.detection.box.width),
             _height: Math.round(d.detection.box.height),
         },
+        confidence: d.detection.score ?? 1.0,
+        blur_score: 10.0,
+        quality: { is_valid: true, reason: 'Clear' },
     }));
     const faces = dedupeByIoU(merged, 0.4);
     return { faces, metadata: buildMetadata(image, faces.length) };
 }
-async function getFaceDescriptor(imagePath) {
-    const data = await detectWithDescriptors(imagePath);
+async function getFaceDescriptor(imagePath, options = {}) {
+    const data = await detectWithDescriptors(imagePath, options);
     if (!data.faces.length)
         return null;
     const best = data.faces.reduce((acc, cur) => cur.box._width * cur.box._height > acc.box._width * acc.box._height ? cur : acc);
@@ -384,15 +427,15 @@ async function getAllDescriptors(imagePath) {
     const data = await detectWithDescriptors(imagePath);
     return data.faces.map((f) => f.descriptor);
 }
-async function detectFaces(imagePath) {
-    return detectWithDescriptors(imagePath);
+async function detectFaces(imagePath, options = {}) {
+    return detectWithDescriptors(imagePath, options);
 }
 async function detectFacesBatch(imagePaths) {
     return Promise.all(imagePaths.map((p) => detectWithDescriptors(p)));
 }
 async function extractMetadata(imagePath) {
-    const fileBuffer = fs.readFileSync(imagePath);
-    const blob = new Blob([fileBuffer], { type: 'image/jpeg' });
+    const { buffer, scaleX, scaleY } = await getOptimizedImageBuffer(imagePath);
+    const blob = new Blob([buffer], { type: 'image/jpeg' });
     const formData = new FormData();
     formData.append('file', blob, path.basename(imagePath));
     const baseUrl = process.env.FACE_AI_BASE_URL || 'http://localhost:8000';
@@ -402,7 +445,22 @@ async function extractMetadata(imagePath) {
             body: formData,
         });
         if (res && res.ok) {
-            return await res.json();
+            const data = (await res.json());
+            // Scale object bounding boxes back to original frame coordinates
+            if (data && Array.isArray(data.objects) && scaleX && scaleY) {
+                data.objects = data.objects.map((o) => {
+                    if (o.bbox && Array.isArray(o.bbox) && o.bbox.length === 4) {
+                        o.bbox = [
+                            Math.round(o.bbox[0] * scaleX),
+                            Math.round(o.bbox[1] * scaleY),
+                            Math.round(o.bbox[2] * scaleX),
+                            Math.round(o.bbox[3] * scaleY),
+                        ];
+                    }
+                    return o;
+                });
+            }
+            return data;
         }
     }
     catch (err) {

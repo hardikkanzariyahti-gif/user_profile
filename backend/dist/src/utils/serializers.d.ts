@@ -35,6 +35,7 @@ declare function toGalleryResponse(item: GalleryItem & {
     url: string | null | undefined;
     thumbnailUrl: string | null | undefined;
     uploadedAt: Date;
+    createdAt: any;
     label: string | null | undefined;
     isProfile: boolean;
     userId: number | null | undefined;
@@ -69,11 +70,8 @@ declare function toGalleryResponse(item: GalleryItem & {
         lastScanError: any;
         lastMetaError: any;
     };
-    people: {
-        id: any;
-        name: any;
-        profilePicture: string | null;
-    }[];
+    people: any;
+    recognizedUsers: any;
     scanStatus: string;
     metadataStatus: string;
     lastScanError: any;
@@ -93,11 +91,6 @@ declare function toGalleryResponse(item: GalleryItem & {
         status: any;
         confidence: any;
         reason: any;
-    }[];
-    recognizedUsers: {
-        id: any;
-        name: any;
-        profilePicture: string | null;
     }[];
 };
 export { toUserResponse, toGalleryResponse };

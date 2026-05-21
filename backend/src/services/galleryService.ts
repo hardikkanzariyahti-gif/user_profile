@@ -128,9 +128,34 @@ interface ImageTask {
 }
 
 class ImageTaskQueue {
-  private queue: ImageTask[] = [];
-  private active = new Set<number>();
+  public queue: ImageTask[] = [];
+  public active = new Set<number>();
   private concurrency = 2; // Process max 2 images at a time for absolute safe concurrency
+
+  public totalJobs = 0;
+  public completedJobs = 0;
+
+  public async getStage(): Promise<'Upload' | 'Face' | 'Metadata' | 'Complete'> {
+    if (this.active.size === 0 && this.queue.length === 0) {
+      return 'Complete';
+    }
+    const activeIds = Array.from(this.active);
+    if (activeIds.length === 0) return 'Upload';
+    try {
+      const items = await prisma.galleryItem.findMany({
+        where: { id: { in: activeIds } },
+        select: { scanStatus: true, metadataStatus: true }
+      });
+      const hasMeta = items.some(item => 
+        item.metadataStatus === 'object_detection' || 
+        item.metadataStatus === 'metadata_generation'
+      );
+      if (hasMeta) return 'Metadata';
+      const hasFace = items.some(item => item.scanStatus === 'face_scan');
+      if (hasFace) return 'Face';
+    } catch { }
+    return 'Upload';
+  }
 
   public enqueue(imageId: number, isForceScan = false, isForceMeta = false): Promise<void> {
     return new Promise((resolve, reject) => {
@@ -139,9 +164,32 @@ class ImageTaskQueue {
         console.log(`[QUEUE] imageId ${imageId} already processing or queued. Skipping enqueue.`);
         return resolve(); // Already handled
       }
+      if (this.active.size === 0 && this.queue.length === 0) {
+        this.totalJobs = 1;
+        this.completedJobs = 0;
+      } else {
+        this.totalJobs++;
+      }
       this.queue.push({ imageId, isForceScan, isForceMeta, resolve, reject, retries: 0 });
       this.next();
     });
+  }
+
+  public cancelAll(): { activeCancelled: number; queuedCancelled: number } {
+    const activeCancelled = this.active.size;
+    const queuedCancelled = this.queue.length;
+    console.log(`[QUEUE] Cancelling all background jobs. Active: ${activeCancelled}, Queued: ${queuedCancelled}`);
+    
+    for (const task of this.queue) {
+      task.reject(new Error('Job cancelled by administrator action.'));
+    }
+    
+    this.queue = [];
+    this.active.clear();
+    this.totalJobs = 0;
+    this.completedJobs = 0;
+
+    return { activeCancelled, queuedCancelled };
   }
 
   private async next() {
@@ -211,6 +259,7 @@ class ImageTaskQueue {
       }
     } finally {
       this.active.delete(task.imageId);
+      this.completedJobs++;
       // Process next in line immediately
       setImmediate(() => this.next());
     }
@@ -624,33 +673,12 @@ const galleryService = {
     const userMap: Record<number, any> = {};
     for (const u of allUsers) userMap[u.id] = u;
 
-    // Synthetic profile items for users who have profile pictures
-    const dynamicProfileItems = allUsers
-      .filter((u: any) => u.profile_picture)
-      .map((u: any) => ({
-        id: `profile-${u.id}`,
-        url: u.profile_picture,
-        uploadedAt: new Date(0),
-        label: `${u.name}'s Profile`,
-        isProfile: true,
-        userId: u.id,
-        recognizedUserIds: [u.id],
-        hashtags: [],
-        metadata: null,
-      }));
-
-    const merged = [...galleryItems, ...dynamicProfileItems];
+    const merged = galleryItems.filter((item: any) => !item.isProfile);
     const seenUrls = new Set<string>();
     const uniqueItems: any[] = [];
 
     for (const item of merged) {
       if (!item.url || seenUrls.has(item.url)) continue;
-
-      // If it's a profile photo in the gallery, we only show it if it's the PRIMARY one for that user
-      if (item.isProfile && item.userId) {
-        const user = userMap[item.userId];
-        if (user && user.profile_picture !== item.url) continue;
-      }
 
       const filename = item.url.split('/').pop();
       if (!filename || !fs.existsSync(path.join(UPLOADS_DIR, filename))) continue;
@@ -803,20 +831,79 @@ const galleryService = {
   },
 
   // ── Upload gallery ──────────────────────────────────────────────────────────
-  async uploadGallery(files: any[] = [], userId: any = null) {
+  async uploadGallery(
+    files: any[] = [],
+    userId: any = null,
+    eventInfo?: { eventName?: string; location?: string; date?: string; description?: string; eventId?: number; tags?: string[] }
+  ) {
     if (!files || files.length === 0) throw httpError(400, 'No files uploaded');
-    invalidateModelCache();
 
     const uploaderId = userId ? Number(userId) : null;
 
+    // 1. Auto-Album generation/association for Event / Tour uploads
+    let targetAlbumId: number | null = null;
+    if (eventInfo && (eventInfo.eventId || eventInfo.eventName)) {
+      if (eventInfo.eventId) {
+        targetAlbumId = eventInfo.eventId;
+        console.log(`[EVENT_SELECT] eventId: ${targetAlbumId}`);
+      } else if (eventInfo.eventName) {
+        let effectiveUserId = uploaderId;
+        // Hard fallback to first admin/user to prevent relation constraints if uploader ID is somehow missing
+        if (!effectiveUserId) {
+          const firstUser = await prisma.user.findFirst({ select: { id: true } });
+          if (firstUser) effectiveUserId = firstUser.id;
+        }
+
+        if (effectiveUserId) {
+          let album = await prisma.album.findFirst({
+            where: {
+              title: eventInfo.eventName,
+              userId: effectiveUserId
+            }
+          });
+
+          if (!album) {
+            album = await prisma.album.create({
+              data: {
+                title: eventInfo.eventName,
+                description: eventInfo.description || `Photo event: ${eventInfo.eventName}`,
+                userId: effectiveUserId,
+                isGlobal: true
+              }
+            });
+            console.log(`[Event Upload] Created custom event album: "${album.title}" (ID: ${album.id})`);
+          } else {
+            console.log(`[Event Upload] Appending items to existing album: "${album.title}" (ID: ${album.id})`);
+          }
+          targetAlbumId = album.id;
+          console.log(`[EVENT_SELECT] eventId: ${targetAlbumId}`);
+        }
+      }
+    }
+
+    // 2. Map gallery items and embed preset metadata
     const itemsToSave = files.map(file => ({
       url: buildUploadUrl(file.filename),
-      uploadedAt: new Date(),
+      uploadedAt: eventInfo?.date ? new Date(eventInfo.date) : new Date(),
       recognizedUserIds: [] as number[],
       userId: uploaderId,
       faceDescriptors: null,
       scanStatus: 'pending',
       metadataStatus: 'pending',
+      hashtags: eventInfo?.tags || undefined,
+      // Seed the metadata which automatically gets merged & protected by AI pipelines
+      metadata: eventInfo ? {
+        eventName: eventInfo.eventName,
+        customEvent: eventInfo.eventName,
+        location: eventInfo.location || null,
+        customLocation: eventInfo.location || null,
+        description: eventInfo.description || null,
+        metadataGenerated: false
+      } : undefined,
+      // Express connection to the Album via Prisma implicit M-N relations
+      albums: targetAlbumId ? {
+        connect: [{ id: targetAlbumId }]
+      } : undefined
     }));
 
     await galleryRepository.createMany(itemsToSave);
@@ -853,7 +940,11 @@ const galleryService = {
     }
 
     const gallery = await this.listGallery(userId);
-    return gallery;
+    return {
+      gallery,
+      albumId: targetAlbumId,
+      uploadedItemIds: itemIds
+    };
   },
 
   async forceScanItem(galleryItemId: number) {
@@ -953,6 +1044,149 @@ const galleryService = {
     return { message: `Tagged ${user.name} successfully`, profilePictureSet };
   },
 
+  async bulkTagAndAlbum(itemIds: number[], targetUserId: number | null | undefined, currentUserId: number, targetTagName?: string | null) {
+    try {
+      // 1. Resolve target user profile or event tag
+      let user = null;
+      let albumTitle = '';
+
+      if (targetUserId) {
+        user = await userRepository.findById(Number(targetUserId));
+        if (!user) throw new Error('Target user profile not found.');
+        albumTitle = user.name.trim();
+      } else if (targetTagName) {
+        const trimmedName = targetTagName.trim();
+        if (!trimmedName) throw new Error('Tag name cannot be empty.');
+        
+        // Look up user by name (case-insensitive)
+        const existingUser = await prisma.user.findFirst({
+          where: {
+            name: { equals: trimmedName, mode: 'insensitive' }
+          }
+        });
+
+        if (existingUser) {
+          user = existingUser;
+          albumTitle = existingUser.name.trim();
+        } else {
+          // As explicitly requested: Event/Album creation must save only in the Album/Event table.
+          // It must NOT create user/profile records or fake emails.
+          albumTitle = trimmedName;
+          console.log(`[EVENT_CREATE] eventName: ${albumTitle}`);
+          console.log(`[EVENT_CREATE] shouldNotCreateProfile: true`);
+        }
+      } else {
+        throw new Error('Either targetUserId or targetTagName must be provided.');
+      }
+
+      // 2. Validate current user to own the album to avoid Prisma Foreign Key 500 errors
+      const ownerExists = await prisma.user.findUnique({ where: { id: currentUserId } });
+      const finalUserId = ownerExists ? currentUserId : (await prisma.user.findFirst({ select: { id: true } }))?.id;
+      if (!finalUserId) {
+        throw new Error('No valid database user exists to own the album. Please register a profile first.');
+      }
+
+      // 3. Filter valid photo IDs that physically exist in the DB
+      const uniqueItemIds = Array.from(new Set(itemIds.map(Number)));
+      const existingItems = await prisma.galleryItem.findMany({
+        where: {
+          id: { in: uniqueItemIds },
+          isProfile: false
+        },
+        select: { id: true, url: true, recognizedUserIds: true }
+      });
+      
+      const validItemIds = existingItems.map(item => item.id);
+      if (validItemIds.length === 0) {
+        throw new Error('None of the selected photos exist in the database catalog.');
+      }
+
+      // 4. Run Album Creation & Custom Photo Tag updates inside one single database Transaction for speed and safety
+      const transactionResult = await prisma.$transaction(async (tx) => {
+        // Search if album already exists with the same title under this user (case-insensitive)
+        const existingAlbum = await tx.album.findFirst({
+          where: {
+            userId: finalUserId,
+            title: { equals: albumTitle, mode: 'insensitive' }
+          }
+        });
+
+        let targetAlbum;
+        if (existingAlbum) {
+          // Connect existing items
+          targetAlbum = await tx.album.update({
+            where: { id: existingAlbum.id },
+            data: {
+              items: {
+                connect: validItemIds.map(id => ({ id }))
+              }
+            },
+            include: { items: true }
+          });
+        } else {
+          // Create new album
+          targetAlbum = await tx.album.create({
+            data: {
+              title: albumTitle,
+              userId: finalUserId,
+              isGlobal: true,
+              items: {
+                connect: validItemIds.map(id => ({ id }))
+              }
+            },
+            include: { items: true }
+          });
+        }
+
+        // Apply recognized user tags to the photo records inside the transaction only if user exists
+        if (user) {
+          for (const item of existingItems) {
+            const currentIds = Array.isArray(item.recognizedUserIds) ? item.recognizedUserIds.map(Number) : [];
+            if (!currentIds.includes(Number(user.id))) {
+              await tx.galleryItem.update({
+                where: { id: item.id },
+                data: {
+                  recognizedUserIds: [...currentIds, Number(user.id)]
+                }
+              });
+            }
+          }
+        }
+
+        return targetAlbum;
+      });
+
+      if (!user) {
+        console.log(`[EVENT_CREATE] createdAlbumId: ${transactionResult.id}`);
+        if (transactionResult.items && transactionResult.items.length > 0) {
+          console.log(`[EVENT_PHOTOS] eventId: ${transactionResult.id}`);
+          console.log(`[EVENT_PHOTOS] count: ${transactionResult.items.length}`);
+          transactionResult.items.forEach((item: any) => {
+            console.log(`[EVENT_PHOTOS] imageUrl: ${item.url}`);
+          });
+        }
+      }
+
+      // 5. Invalidate client-side caches
+      invalidateModelCache();
+
+      const successMsg = user 
+        ? `Successfully tagged ${validItemIds.length} photos with "${user.name}" and synced to album "${albumTitle}".` 
+        : `Successfully organized ${validItemIds.length} photos into event album "${albumTitle}".`;
+      console.log(`[BulkTag] ${successMsg}`);
+
+      return {
+        success: true,
+        message: successMsg,
+        albumId: transactionResult.id,
+        albumTitle: albumTitle
+      };
+    } catch (err: any) {
+      console.error('[BulkTag] Failed creating custom tag and album:', err);
+      throw new Error(`Bulk tag and album creation failed: ${err.message}`);
+    }
+  },
+
   async untagFace(galleryItemId: number, userId: number, faceIndex?: number) {
     const item = await galleryRepository.findById(galleryItemId);
     if (!item) throw new Error('Item not found');
@@ -980,6 +1214,28 @@ const galleryService = {
     invalidateModelCache();
     this.refreshGalleryRecognition().catch(err => console.error('[Untag] BG refresh failed:', err));
     return { message: 'Tag removed successfully' };
+  },
+
+  async getProcessingStatus() {
+    const activeCount = imageQueue.active.size;
+    const queuedCount = imageQueue.queue.length;
+    const isProcessing = activeCount > 0 || queuedCount > 0;
+    const stage = await imageQueue.getStage();
+    
+    let total = imageQueue.totalJobs;
+    let completed = imageQueue.completedJobs;
+    
+    if (isProcessing && total === 0) {
+      total = activeCount + queuedCount;
+      completed = 0;
+    }
+    
+    return {
+      isProcessing,
+      total,
+      completed: Math.min(completed, total),
+      stage
+    };
   },
 
   syncState: { isScanning: false, total: 0, current: 0 },
@@ -1275,72 +1531,112 @@ const galleryService = {
       realItems.slice(i * CLUSTER_CHUNK, i * CLUSTER_CHUNK + CLUSTER_CHUNK)
     );
 
-    const unknownPhotos = (await Promise.all(batches.map(async (chunk) => {
-      const chunkDetections = await detectFacesWithCacheBatch(chunk);
+    const allUnknownFaces: Array<{ itemId: number; url: string; faceIndex: number; box: any; descriptor: Float32Array; uploadedAt: number; similarity: number; status: string }> = [];
 
-      return chunk.map((item, chunkIdx) => {
+    for (const chunk of batches) {
+      const chunkDetections = await detectFacesWithCacheBatch(chunk);
+      chunk.forEach((item, chunkIdx) => {
         const detections = chunkDetections[chunkIdx];
         const faceDescs = Array.isArray(item.faceDescriptors) ? item.faceDescriptors as any[] : [];
-        const recognizedIds = Array.isArray(item.recognizedUserIds)
-          ? item.recognizedUserIds.map((id: any) => Number(id))
-          : [];
 
-        const unknownFacesInPhoto = detections
-          .map((det: any, i: number) => {
-            const cachedFace = faceDescs[i] || {};
-            if (cachedFace.manuallyTaggedUserId || cachedFace.isIgnored) return null;
+        detections.forEach((det: any, i: number) => {
+          const cachedFace = faceDescs[i] || {};
+          if (cachedFace.manuallyTaggedUserId || cachedFace.isIgnored) return;
 
-            const box = det?.box || cachedFace.box;
-            if (!box) return null;
+          const box = det?.box || cachedFace.box;
+          if (!box) return;
+          const descriptor = det?.descriptor;
+          if (!descriptor) return;
 
-            let isUnknown = false;
-            if (cachedFace.status) {
-              isUnknown = (cachedFace.status === 'unknown' || cachedFace.status === 'possible' || cachedFace.status === 'ambiguous');
-            } else {
-              const descriptor = det?.descriptor;
-              if (!descriptor) return { itemId: item.id, faceIndex: i, box, descriptor: null };
-              const match = faceAi.findBestMatchWithMargin(descriptor, labeledDescriptors);
-              isUnknown = (match.label === 'unknown');
-            }
+          let isUnknown = false;
+          if (cachedFace.status) {
+            isUnknown = (cachedFace.status === 'unknown' || cachedFace.status === 'possible' || cachedFace.status === 'ambiguous');
+          } else {
+            const match = faceAi.findBestMatchWithMargin(descriptor, labeledDescriptors);
+            isUnknown = (match.label === 'unknown');
+          }
 
-            if (!isUnknown) return null;
-
-            return {
+          if (isUnknown) {
+            allUnknownFaces.push({
               itemId: item.id,
+              url: buildUploadUrl(item.url?.split('/').pop() || ''),
               faceIndex: i,
               box,
-              descriptor: det?.descriptor,
+              descriptor,
+              uploadedAt: new Date(item.uploadedAt).getTime(),
               similarity: cachedFace.similarity || 0,
               status: cachedFace.status || 'unknown',
-            };
-          })
-          .filter((f: any) => f !== null);
-
-        // Only show photos that have ACTUAL unknown faces with real bounding boxes.
-        // Photos with zero detected faces should NOT appear in the People page.
-        if (unknownFacesInPhoto.length === 0) return null;
-
-        return {
-          clusterId: `photo-${item.id}`,
-          faceCount: unknownFacesInPhoto.length,
-          anchorImage: buildUploadUrl(item.url?.split('/').pop() || ''),
-          anchorBox: unknownFacesInPhoto[0]?.box || null,
-          uploadedAt: new Date(item.uploadedAt).getTime(),
-          relatedPhotos: unknownFacesInPhoto.map((f: any) => ({
-            itemId: f.itemId,
-            faceIndex: f.faceIndex,
-            url: buildUploadUrl(item.url?.split('/').pop() || ''),
-            box: f.box,
-            similarity: f.similarity,
-            status: f.status,
-          })),
-        };
+            });
+          }
+        });
       });
-    }))).flat().filter(r => r !== null);
+    }
 
-    const cleanedClusters = unknownPhotos
+    // Cluster all unknown faces by embedding distance threshold
+    const CLUSTER_DISTANCE_THRESHOLD = 0.35; // Strict limit to prevent unrelated face merging
+
+    const clusters: Array<{ 
+      clusterId: string; 
+      faceCount: number; 
+      anchorImage: string; 
+      anchorBox: any; 
+      uploadedAt: number; 
+      relatedPhotos: any[];
+      descriptors: Float32Array[];
+    }> = [];
+
+    for (const face of allUnknownFaces) {
+      let matchedCluster = null;
+      let minDistance = 2;
+
+      for (const cluster of clusters) {
+        let totalDist = 0;
+        for (const desc of cluster.descriptors) {
+          totalDist += faceAi.cosineDistance(face.descriptor, desc);
+        }
+        const avgDist = totalDist / cluster.descriptors.length;
+
+        if (avgDist < minDistance) {
+          minDistance = avgDist;
+          matchedCluster = cluster;
+        }
+      }
+
+      if (matchedCluster && minDistance <= CLUSTER_DISTANCE_THRESHOLD) {
+        matchedCluster.faceCount += 1;
+        matchedCluster.descriptors.push(face.descriptor);
+        matchedCluster.relatedPhotos.push({
+          itemId: face.itemId,
+          faceIndex: face.faceIndex,
+          url: face.url,
+          box: face.box,
+          similarity: face.similarity,
+          status: face.status,
+        });
+        matchedCluster.uploadedAt = Math.max(matchedCluster.uploadedAt, face.uploadedAt);
+      } else {
+        clusters.push({
+          clusterId: `cluster-${face.itemId}-${face.faceIndex}`,
+          faceCount: 1,
+          anchorImage: face.url,
+          anchorBox: face.box,
+          uploadedAt: face.uploadedAt,
+          descriptors: [face.descriptor],
+          relatedPhotos: [{
+            itemId: face.itemId,
+            faceIndex: face.faceIndex,
+            url: face.url,
+            box: face.box,
+            similarity: face.similarity,
+            status: face.status,
+          }]
+        });
+      }
+    }
+
+    const cleanedClusters = clusters
       .sort((a, b) => b.uploadedAt - a.uploadedAt)
-      .map(({ uploadedAt, ...photo }) => photo);
+      .map(({ descriptors, uploadedAt, ...clusterData }) => clusterData);
 
     _clusterCache = cleanedClusters;
     _clusterCacheTime = Date.now();
@@ -1751,6 +2047,25 @@ const galleryService = {
       return;
     }
 
+    // Check if the physical image file exists on disk (Requirement 5 & 6)
+    const filename = item.url.split('/').pop();
+    const filePath = filename ? path.join(UPLOADS_DIR, filename) : null;
+    if (!filePath || !fs.existsSync(filePath)) {
+      console.warn(`[PROCESS] Image ${imageId} file not found on disk: "${filePath}". Marking as failed_missing_file.`);
+      
+      const currentRaw = (item?.metadata as any)?.rawJson || {};
+      await galleryRepository.updateById(imageId, {
+        scanStatus: 'failed_missing_file',
+        metadataStatus: 'failed_missing_file',
+        metadata: {
+          ...currentRaw,
+          lastScanError: 'File not found on disk. Skipped background retries.',
+          lastMetaError: 'File not found on disk. Skipped background retries.',
+        }
+      });
+      return;
+    }
+
     const currentScan = item.scanStatus || 'pending';
     const currentMeta = item.metadataStatus || 'pending';
 
@@ -1890,7 +2205,12 @@ const galleryService = {
     const combinedHashtags = Array.from(new Set([...manualTags, ...cleaned.autoHashtags]));
 
     // ── Deep Folksomonic Enrichment Fallback (Requirement 2, 3 & 5) ─────────
-    const currentPersonCount = aiMetadata.metadata?.person_count ?? rawObjects.filter((o: any) => (o?.name || o) === 'person').length;
+    const faceDescs = Array.isArray(item.faceDescriptors) ? item.faceDescriptors : [];
+    const faceScannerCount = faceDescs.length;
+
+    const currentPersonCount = faceScannerCount > 0 
+      ? faceScannerCount 
+      : (aiMetadata.metadata?.person_count ?? rawObjects.filter((o: any) => (o?.name || o) === 'person').length);
     const fallbacks = enrichMetadataWithHashtagFallbacks(
       combinedHashtags,
       cleaned.cleanObjects,
@@ -1962,16 +2282,16 @@ const galleryService = {
     } catch (err) { }
     console.log(`[UPLOAD] imageId: ${imageId} original dimensions: ${width}x${height}`);
 
-    const currentPath = await pickScanPathAndOptimize(filePath).catch(() => filePath);
-    console.log(`[SCAN] scan image path: ${currentPath}`);
+    console.log(`[SCAN] scanning high-quality original image path: ${filePath}`);
 
     let faceDescriptors: any = { status: 'failed', reason: 'Pending' };
     let recognizedUserIds: number[] = [];
 
     try {
-      const data = await faceAi.detectFaces(currentPath);
+      const data = await faceAi.detectFaces(filePath);
       const detections = data.faces || [];
       console.log(`[SCAN] imageId: ${imageId} face count: ${detections.length}`);
+      console.log(`[FACE] detected faces count: ${detections.length}`);
 
       invalidateModelCache();
       const labeledDescriptors = await getCachedModel();
@@ -2114,6 +2434,12 @@ const galleryService = {
 
       // RECONCILIATION COMPLETE
       const finalRecognizedArray = Array.from(finalUserIdsSet);
+      const matchedUserIds = finalRecognizedArray;
+      const unmatchedCount = detections.length - finalMergedFaceDescriptors.filter(f => f.status === 'recognized').length;
+
+      console.log(`[FACE] matched users: ${JSON.stringify(matchedUserIds)}`);
+      console.log(`[FACE] unmatched faces: ${unmatchedCount}`);
+      console.log(`[PHOTO] recognizedUserIds saved: ${JSON.stringify(finalRecognizedArray)}`);
       console.log(`[SCAN-SUCCESS] Commit State for ${imageId}: Derived Users=${JSON.stringify(finalRecognizedArray)} FacesSaved=${finalMergedFaceDescriptors.length}`);
 
       await galleryRepository.updateById(imageId, {
@@ -2177,16 +2503,39 @@ const galleryService = {
       return { count: 0 };
     }
 
-    console.log(`[System] 📂 Found ${missing.length} missing files. Importing...`);
+    console.log(`[System] 📂 Found ${missing.length} missing files. Importing in chunks...`);
 
-    const newItems = await Promise.all(missing.map(async (filename) => {
-      const url = buildUploadUrl(filename);
-      return galleryRepository.createOne({
-        url,
-        uploadedAt: new Date(),
-        recognizedUserIds: [],
-      });
-    }));
+    const newItems: any[] = [];
+    const CHUNK_SIZE = 50;
+    for (let i = 0; i < missing.length; i += CHUNK_SIZE) {
+      const chunk = missing.slice(i, i + CHUNK_SIZE);
+      const chunkItems = await Promise.all(chunk.map(async (filename) => {
+        const url = buildUploadUrl(filename);
+
+        // Extract original timestamp from standard prefix format (e.g., 1776319310404-911463443.jpg)
+        let fileDate = new Date();
+        const parts = filename.split('-');
+        if (parts.length > 0) {
+          const msStr = parts[0];
+          if (/^\d{13}$/.test(msStr)) {
+            fileDate = new Date(Number(msStr));
+          } else {
+            try {
+              const stats = fs.statSync(path.join(UPLOADS_DIR, filename));
+              fileDate = stats.birthtime || stats.mtime || new Date();
+            } catch (e) { }
+          }
+        }
+
+        return galleryRepository.createOne({
+          url,
+          uploadedAt: fileDate,
+          recognizedUserIds: [],
+        });
+      }));
+      newItems.push(...chunkItems);
+      console.log(`[System] 📂 Imported chunk ${Math.ceil(i / CHUNK_SIZE) + 1}/${Math.ceil(missing.length / CHUNK_SIZE)}...`);
+    }
 
     console.log(`[System] 📂 Successfully imported ${newItems.length} photos.`);
     return { count: newItems.length };
@@ -2196,7 +2545,7 @@ const galleryService = {
     console.log('[System] ⚡ Booting ImageTaskQueue recovery & startup protocol...');
 
     try {
-      // 1. Recovery: Reset stuck 'processing' items back to 'pending' (Requirement 7)
+      // 1. Recovery: Reset stuck 'processing' items back to 'failed' to clear any stuck UI spinners on boot
       const stuckItems = await prisma.galleryItem.findMany({
         where: {
           OR: [
@@ -2208,51 +2557,99 @@ const galleryService = {
       });
 
       if (stuckItems.length > 0) {
-        console.log(`[System] 🛠️ Found ${stuckItems.length} stuck processing items. Resetting to pending...`);
+        console.log(`[System] 🛠️ Found ${stuckItems.length} stuck processing items. Resetting to failed...`);
         for (const item of stuckItems) {
           const currentRaw = (item?.metadata as any)?.rawJson || {};
-          const cleanedMeta = { ...currentRaw };
-          delete cleanedMeta.lastScanError;
-          delete cleanedMeta.lastMetaError;
-
           await galleryRepository.updateById(item.id, {
-            scanStatus: item.scanStatus === 'processing' ? 'pending' : item.scanStatus,
-            metadataStatus: item.metadataStatus === 'processing' ? 'pending' : item.metadataStatus,
-            metadata: cleanedMeta
+            scanStatus: item.scanStatus === 'processing' ? 'failed' : item.scanStatus,
+            metadataStatus: item.metadataStatus === 'processing' ? 'failed' : item.metadataStatus,
+            metadata: {
+              ...currentRaw,
+              lastScanError: 'System restarted during processing. Mark as failed.',
+              lastMetaError: 'System restarted during processing. Mark as failed.'
+            }
           });
         }
         console.log('[System] 🛠️ Stuck items successfully recovered.');
       }
 
-      // 2. Startup: Automatically load ALL pending items into the job queue
-      const pendingItems = await prisma.galleryItem.findMany({
-        where: {
-          AND: [
-            { isProfile: false },
-            {
-              OR: [
-                { scanStatus: 'pending' },
-                { metadataStatus: 'pending' }
-              ]
-            }
-          ]
-        },
-        select: { id: true }
-      });
-
-      if (pendingItems.length > 0) {
-        console.log(`[System] ⚡ Enqueueing ${pendingItems.length} pending images for background processing...`);
-        for (const item of pendingItems) {
-          // Pushes to queue instantly and triggers non-blocking concurrency manager
-          imageQueue.enqueue(item.id).catch(() => { });
-        }
-        console.log(`[System] 🚀 Enqueued ${pendingItems.length} items to the in-memory queue.`);
-      } else {
-        console.log('[System] ✨ All gallery images are fully resolved. Queue idle.');
-      }
+      // [Configuration Option] Startup auto-scanning / automatic folder rescan is permanently disabled.
+      // We do not run folder synchronization or auto-enqueue 670 old pending photos on startup.
+      console.log('[System] ✨ Startup auto-scanning and sync completely disabled to prevent background processing loops.');
     } catch (err: any) {
       console.error('[System] 🛑 Gallery Queue Startup failed:', err.message);
     }
+  },
+
+  async cancelProcessing() {
+    console.log('[System] 🛑 Received request to cancel all background processing.');
+    
+    // 1. Cancel in-memory task queue
+    const queueStatus = imageQueue.cancelAll();
+
+    // 2. Scan DB for pending or processing or failed items whose physical files are missing
+    const items = await prisma.galleryItem.findMany({
+      where: {
+        OR: [
+          { scanStatus: { in: ['pending', 'processing', 'failed', 'face_scan', 'saved'] } },
+          { metadataStatus: { in: ['pending', 'processing', 'failed', 'object_detection', 'metadata_generation', 'saved'] } }
+        ]
+      },
+      select: { id: true, url: true, metadata: true }
+    });
+
+    let cleanedCount = 0;
+    const affectedDetails: { id: number; url: string }[] = [];
+
+    for (const item of items) {
+      const filename = item.url.split('/').pop();
+      const filePath = filename ? path.join(UPLOADS_DIR, filename) : null;
+      
+      if (!filePath || !fs.existsSync(filePath)) {
+        cleanedCount++;
+        affectedDetails.push({ id: item.id, url: item.url });
+        
+        const currentRaw = (item?.metadata as any)?.rawJson || {};
+        await galleryRepository.updateById(item.id, {
+          scanStatus: 'failed_missing_file',
+          metadataStatus: 'failed_missing_file',
+          metadata: {
+            ...currentRaw,
+            lastScanError: 'File not found on disk. Cancelled and cleaned up.',
+            lastMetaError: 'File not found on disk. Cancelled and cleaned up.',
+          }
+        });
+      }
+    }
+
+    // 3. Reset any remaining 'processing', 'face_scan', 'object_detection', or 'metadata_generation' states to 'failed' (since they were cancelled)
+    const remainingActive = await prisma.galleryItem.findMany({
+      where: {
+        OR: [
+          { scanStatus: { in: ['processing', 'face_scan', 'saved'] } },
+          { metadataStatus: { in: ['processing', 'object_detection', 'metadata_generation', 'saved'] } }
+        ]
+      },
+      select: { id: true, url: true }
+    });
+
+    for (const item of remainingActive) {
+      await galleryRepository.updateById(item.id, {
+        scanStatus: 'failed',
+        metadataStatus: 'failed'
+      });
+    }
+
+    console.log(`[System] 🛑 Processing cancelled. Terminated: ${queueStatus.activeCancelled} active, ${queueStatus.queuedCancelled} queued. Marked ${cleanedCount} missing files as failed_missing_file.`);
+    
+    return {
+      success: true,
+      message: `Successfully cancelled all background tasks. Stopped ${queueStatus.activeCancelled} active, ${queueStatus.queuedCancelled} queued. Cleaned up ${cleanedCount} missing files from the queue.`,
+      activeCancelled: queueStatus.activeCancelled,
+      queuedCancelled: queueStatus.queuedCancelled,
+      cleanedCount,
+      affectedDetails
+    };
   }
 
 };

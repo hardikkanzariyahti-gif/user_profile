@@ -183,3 +183,31 @@ export function retryMetadataExtraction(galleryItemId: number): Promise<any> {
     method: 'POST',
   });
 }
+
+export function bulkTagAndAlbum(
+  itemIds: number[],
+  targetUserId: number | null | undefined,
+  currentUserId: number,
+  targetTagName?: string | null
+): Promise<any> {
+  return request('/api/gallery/bulk-tag-and-album', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ itemIds, targetUserId, currentUserId, targetTagName }),
+  });
+}
+
+export function getProcessingStatus(): Promise<{
+  isProcessing: boolean;
+  total: number;
+  completed: number;
+  stage: 'Upload' | 'Face' | 'Metadata' | 'Complete';
+}> {
+  return request('/api/gallery/processing-status');
+}
+
+export function cancelProcessing(): Promise<any> {
+  return request('/api/gallery/cancel-processing', {
+    method: 'POST',
+  });
+}

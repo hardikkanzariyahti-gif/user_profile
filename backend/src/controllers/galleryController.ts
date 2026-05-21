@@ -73,7 +73,35 @@ const galleryController = {
   },
 
   async upload(req: Request, res: Response) {
-    const result = await galleryService.uploadGallery(req.files as any || [], req.query.userId);
+    const isEventUpload = req.body?.isEventUpload === 'true';
+    const eventName = req.body?.eventName;
+    const eventId = req.body?.eventId ? Number(req.body.eventId) : undefined;
+    const location = req.body?.eventLocation;
+    const date = req.body?.eventDate;
+    const description = req.body?.eventDescription;
+
+    let tags: string[] | undefined = undefined;
+    if (req.body?.tags) {
+      if (Array.isArray(req.body.tags)) {
+        tags = req.body.tags;
+      } else if (typeof req.body.tags === 'string') {
+        tags = req.body.tags
+          .split(',')
+          .map((t: string) => t.trim().toLowerCase())
+          .filter(Boolean);
+      }
+    }
+
+    const eventInfo = (isEventUpload || eventName || eventId || location || date || description || tags) ? {
+      eventName: eventName || undefined,
+      location: location || undefined,
+      date: date || undefined,
+      description: description || undefined,
+      eventId: eventId || undefined,
+      tags: tags || undefined
+    } : undefined;
+
+    const result = await galleryService.uploadGallery(req.files as any || [], req.query.userId, eventInfo);
 
     if (typeof result === 'object' && result !== null && 'gallery' in result && 'suggestions' in result) {
       res.json(result);
@@ -106,6 +134,11 @@ const galleryController = {
       }
     } catch { }
     res.json(galleryService.syncState);
+  },
+
+  async getProcessingStatus(req: Request, res: Response) {
+    const status = await galleryService.getProcessingStatus();
+    res.json(status);
   },
 
   async syncEvents(req: Request, res: Response) {
@@ -263,6 +296,39 @@ const galleryController = {
   async getBackfillStatus(req: Request, res: Response) {
     const status = galleryService.getBackfillStatus();
     res.json(status);
+  },
+
+  async bulkTagAndAlbum(req: Request, res: Response) {
+    const itemIds = req.body.itemIds;
+    const targetUserId = req.body.targetUserId ? Number(req.body.targetUserId) : null;
+    const targetTagName = req.body.targetTagName ? String(req.body.targetTagName).trim() : null;
+    const currentUserId = Number(req.body.currentUserId);
+
+    if (!Array.isArray(itemIds) || itemIds.length === 0 || isNaN(currentUserId)) {
+      res.status(400).json({ error: 'itemIds (array) and currentUserId are required inputs.' });
+      return;
+    }
+
+    if (!targetUserId && !targetTagName) {
+      res.status(400).json({ error: 'Either targetUserId or targetTagName must be provided.' });
+      return;
+    }
+
+    try {
+      const result = await galleryService.bulkTagAndAlbum(itemIds, targetUserId, currentUserId, targetTagName);
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'An error occurred during bulk processing.' });
+    }
+  },
+
+  async cancelProcessing(req: Request, res: Response) {
+    try {
+      const result = await galleryService.cancelProcessing();
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'An error occurred while cancelling background processing.' });
+    }
   },
 
 };

@@ -3,16 +3,11 @@ import albumService from '../services/albumService';
 
 export const albumController = {
   async create(req: Request, res: Response) {
-    const { title, description, itemIds, isGlobal } = req.body;
-    const userId = Number(req.query.userId);
-
-    if (!userId) {
-      res.status(401).json({ error: 'User ID is required' });
-      return;
-    }
+    const { title, description, eventType, date, location, itemIds, isGlobal } = req.body;
+    const userId = Number(req.query.userId || req.body.userId) || 0;
 
     try {
-      const album = await albumService.createAlbum({ title, description, userId, itemIds, isGlobal });
+      const album = await albumService.createAlbum({ title, description, eventType, date, location, userId, itemIds, isGlobal });
       res.status(201).json(album);
     } catch (error: any) {
       res.status(400).json({ error: error.message });
@@ -20,11 +15,7 @@ export const albumController = {
   },
 
   async list(req: Request, res: Response) {
-    const userId = Number(req.query.userId);
-    if (!userId) {
-      res.status(401).json({ error: 'User ID is required' });
-      return;
-    }
+    const userId = Number(req.query.userId) || 0;
 
     try {
       const albums = await albumService.getAlbumsByUser(userId);
@@ -72,10 +63,10 @@ export const albumController = {
   async update(req: Request, res: Response) {
     const userId = Number(req.query.userId);
     const id = Number(req.params.id);
-    const { title, description, itemIds } = req.body;
+    const { title, description, eventType, date, location, itemIds } = req.body;
 
     try {
-      const album = await albumService.updateAlbum(id, userId, { title, description, itemIds });
+      const album = await albumService.updateAlbum(id, userId, { title, description, eventType, date, location, itemIds });
       res.json(album);
     } catch (error: any) {
       res.status(400).json({ error: error.message });

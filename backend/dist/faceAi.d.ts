@@ -13,12 +13,12 @@ type MatchResult = {
     confidence?: number;
 };
 declare function findBestMatchWithMargin(descriptor: Float32Array, knownUsers: any[], isForcedRescan?: boolean): MatchResult;
-declare function getFaceDescriptor(imagePath: string): Promise<Float32Array | null>;
+declare function getFaceDescriptor(imagePath: string, options?: any): Promise<Float32Array | null>;
 declare function identifyFace(targetImagePath: string, knownUsers: any[]): Promise<MatchResult | null>;
 declare function identifyAllFaces(targetImagePath: string, knownUsers: any[]): Promise<any>;
 declare function getFaceSuggestions(targetImagePath: string, knownUsers: any[]): Promise<any[]>;
 declare function getAllDescriptors(imagePath: string): Promise<Float32Array[]>;
-declare function detectFaces(imagePath: string): Promise<{
+declare function detectFaces(imagePath: string, options?: any): Promise<{
     faces: any;
     metadata: any;
 }>;

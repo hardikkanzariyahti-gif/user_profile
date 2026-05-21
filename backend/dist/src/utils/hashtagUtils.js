@@ -141,38 +141,63 @@ function cleanupAIPayload(rawMetadata, objects = [], scenes = [], ocr = []) {
     const topScenes = cleanScenesArr.map(s => s.label.toLowerCase().trim());
     let summarySegments = [];
     if (personCount === 1) {
-        summarySegments.push("Portrait of one person");
+        summarySegments.push("1 person");
     }
     else if (personCount > 1) {
         summarySegments.push(`${personCount} people`);
     }
     else {
-        summarySegments.push("An image");
+        summarySegments.push("A visual capture");
     }
     if (topScenes.length > 0) {
         const primaryScene = topScenes[0];
-        if (primaryScene.includes("indoor")) {
+        if (primaryScene === 'unknown') {
+            // Safely skip unknown scenes to prevent linguistic garbage (Requirement 4)
+        }
+        else if (primaryScene.includes("indoor")) {
             summarySegments.push("indoors");
         }
         else if (primaryScene.includes("outdoor") || primaryScene.includes("nature")) {
             summarySegments.push("outdoors");
         }
         else {
-            summarySegments.push(`situated in ${primaryScene}`);
+            summarySegments.push(`in an ${primaryScene.replace(/\/.*/, '')}`); // e.g., "in an office"
         }
     }
     if (objectsList.length > 0) {
-        const formattedObjects = objectsList.length === 1
-            ? `featuring a ${objectsList[0]}`
-            : `featuring ${objectsList.join(', ')}`;
-        summarySegments.push(formattedObjects);
+        // Contextual action mapping for elegant human-like summaries (Requirement 5)
+        const actionMap = {
+            'laptop': 'using laptop',
+            'phone': 'on a phone',
+            'keyboard': 'at a keyboard',
+            'couch/sofa': 'on a couch',
+            'chair': 'sitting',
+            'monitor/screen': 'near a screen'
+        };
+        const candidateActionKey = Object.keys(actionMap).find(key => objectsList.includes(key));
+        if (candidateActionKey && personCount > 0) {
+            const actionPhrase = actionMap[candidateActionKey];
+            const extraObjects = objectsList.filter(o => o !== candidateActionKey);
+            let phrase = actionPhrase;
+            if (extraObjects.length > 0) {
+                phrase += ` with ${extraObjects.join(', ')}`;
+            }
+            summarySegments.push(phrase);
+        }
+        else {
+            const formattedObjects = objectsList.length === 1
+                ? `featuring a ${objectsList[0]}`
+                : `featuring ${objectsList.join(', ')}`;
+            summarySegments.push(formattedObjects);
+        }
     }
     let dynamicCaption = summarySegments.join(" ");
-    if (dynamicCaption === "An image") {
-        dynamicCaption = "Analysis completed with minimal physical features identified.";
+    if (dynamicCaption === "A visual capture") {
+        dynamicCaption = "Analysis completed with minimal distinguishable entities identified.";
     }
     else {
-        dynamicCaption += ".";
+        // Ensure clean whitespace handling in join
+        dynamicCaption = dynamicCaption.replace(/\s+/g, ' ').trim() + ".";
     }
     dynamicCaption = dynamicCaption.charAt(0).toUpperCase() + dynamicCaption.slice(1);
     // 6. Build Auto Hashtags

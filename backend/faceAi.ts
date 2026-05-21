@@ -8,17 +8,27 @@ faceapi.env.monkeyPatch({ Canvas, Image, ImageData });
 
 import sharp from 'sharp';
 
-async function getOptimizedImageBuffer(imagePath: string) {
+async function getOptimizedImageBuffer(imagePath: string, options: any = {}) {
   try {
     const originalMeta = await sharp(imagePath).metadata();
     const origW = originalMeta.width || 1;
     const origH = originalMeta.height || 1;
 
-    const buffer = await sharp(imagePath)
-      .rotate() // auto-orient based on EXIF tags
-      .resize({ width: 1280, height: 1280, fit: 'inside', withoutEnlargement: true })
-      .jpeg({ quality: 85 })
-      .toBuffer();
+    if (options.useOriginal) {
+      const buffer = await sharp(imagePath).rotate().jpeg({ quality: 95 }).toBuffer();
+      return { buffer, scaleX: 1, scaleY: 1 };
+    }
+
+    let pipeline = sharp(imagePath).rotate();
+    if (options.applyContrast) {
+      pipeline = pipeline.clahe({ width: 8, height: 8, maxSlope: 2 });
+    }
+
+    const w = options.targetW || 1280;
+    const h = options.targetH || 1280;
+    pipeline = pipeline.resize({ width: w, height: h, fit: 'inside', withoutEnlargement: true });
+
+    const buffer = await pipeline.jpeg({ quality: 92 }).toBuffer();
 
     const resizedMeta = await sharp(buffer).metadata();
     const resW = resizedMeta.width || 1;
@@ -287,8 +297,8 @@ async function runSsdFallback(image: any) {
     .withFaceDescriptors();
 }
 
-async function detectWithDescriptors(imagePath: string) {
-  const { buffer, scaleX, scaleY } = await getOptimizedImageBuffer(imagePath);
+async function detectWithDescriptors(imagePath: string, options: any = {}) {
+  const { buffer, scaleX, scaleY } = await getOptimizedImageBuffer(imagePath, options);
   const blob = new Blob([buffer], { type: 'image/jpeg' });
   const formData = new FormData();
   formData.append('file', blob, path.basename(imagePath));
@@ -319,13 +329,16 @@ async function detectWithDescriptors(imagePath: string) {
       const data = await res.json() as any;
       if (data && Array.isArray(data.faces)) {
         const faces = data.faces.map((f: any) => ({
-          descriptor: l2Normalize(new Float32Array(f.descriptor)),
+          descriptor: f.descriptor && f.descriptor.length > 0 ? l2Normalize(new Float32Array(f.descriptor)) : new Float32Array(0),
           box: {
             _x: Math.round(f.box._x * scaleX),
             _y: Math.round(f.box._y * scaleY),
             _width: Math.round(f.box._width * scaleX),
             _height: Math.round(f.box._height * scaleY),
           },
+          confidence: f.confidence ?? 1.0,
+          blur_score: f.blur_score ?? 10.0,
+          quality: f.quality ?? { is_valid: true, reason: 'Clear' },
         }));
         return { faces, metadata: data.metadata };
       }
@@ -356,14 +369,17 @@ async function detectWithDescriptors(imagePath: string) {
       _width: Math.round(d.detection.box.width),
       _height: Math.round(d.detection.box.height),
     },
+    confidence: d.detection.score ?? 1.0,
+    blur_score: 10.0,
+    quality: { is_valid: true, reason: 'Clear' },
   }));
   const faces = dedupeByIoU(merged, 0.4);
 
   return { faces, metadata: buildMetadata(image, faces.length) };
 }
 
-async function getFaceDescriptor(imagePath: string): Promise<Float32Array | null> {
-  const data = await detectWithDescriptors(imagePath);
+async function getFaceDescriptor(imagePath: string, options: any = {}): Promise<Float32Array | null> {
+  const data = await detectWithDescriptors(imagePath, options);
   if (!data.faces.length) return null;
   const best = data.faces.reduce((acc: any, cur: any) =>
     cur.box._width * cur.box._height > acc.box._width * acc.box._height ? cur : acc,
@@ -420,8 +436,8 @@ async function getAllDescriptors(imagePath: string): Promise<Float32Array[]> {
   return data.faces.map((f: any) => f.descriptor);
 }
 
-async function detectFaces(imagePath: string) {
-  return detectWithDescriptors(imagePath);
+async function detectFaces(imagePath: string, options: any = {}) {
+  return detectWithDescriptors(imagePath, options);
 }
 
 async function detectFacesBatch(imagePaths: string[]): Promise<Array<{ faces: Array<{ descriptor: Float32Array; box: any }>; metadata: any }>> {

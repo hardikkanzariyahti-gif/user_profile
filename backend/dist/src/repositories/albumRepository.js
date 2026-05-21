@@ -6,40 +6,60 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const prisma_1 = __importDefault(require("../config/prisma"));
 const albumRepository = {
     async create(data) {
+        const itemIds = data.itemIds || [];
         return prisma_1.default.album.create({
             data: {
                 title: data.title,
                 description: data.description,
+                eventType: data.eventType,
+                date: data.date,
+                location: data.location,
                 isGlobal: data.isGlobal ?? true,
                 userId: data.userId,
-                items: {
-                    connect: data.itemIds.map(id => ({ id })),
-                },
+                items: itemIds.length > 0 ? {
+                    connect: itemIds.map(id => ({ id })),
+                } : undefined,
             },
             include: {
                 items: true,
             },
         });
     },
-    findById(id) {
-        return prisma_1.default.album.findUnique({
-            where: { id },
-            include: {
-                items: true,
-                user: {
-                    select: {
-                        id: true,
-                        name: true,
+    async findById(id) {
+        const [album, items] = await Promise.all([
+            prisma_1.default.album.findUnique({
+                where: { id },
+                include: {
+                    user: {
+                        select: {
+                            id: true,
+                            name: true,
+                        },
                     },
                 },
-            },
-        });
+            }),
+            prisma_1.default.galleryItem.findMany({
+                where: {
+                    albums: { some: { id } }
+                },
+                include: {
+                    metadata: true,
+                    hashtags: true,
+                },
+                orderBy: { uploadedAt: 'desc' }
+            })
+        ]);
+        if (!album)
+            return null;
+        return {
+            ...album,
+            items
+        };
     },
-    findByShareId(shareId) {
-        return prisma_1.default.album.findUnique({
+    async findByShareId(shareId) {
+        const album = await prisma_1.default.album.findUnique({
             where: { shareId },
             include: {
-                items: true,
                 user: {
                     select: {
                         name: true,
@@ -47,18 +67,32 @@ const albumRepository = {
                 },
             },
         });
+        if (!album)
+            return null;
+        const items = await prisma_1.default.galleryItem.findMany({
+            where: {
+                albums: { some: { id: album.id } }
+            },
+            include: {
+                metadata: true,
+                hashtags: true,
+            },
+            orderBy: { uploadedAt: 'desc' }
+        });
+        return {
+            ...album,
+            items
+        };
     },
     findAllByUserId(userId) {
         return prisma_1.default.album.findMany({
-            where: {
-                OR: [
-                    { userId },
-                    { isGlobal: true }
-                ]
-            },
             include: {
                 items: {
-                    take: 1, // To get a cover image
+                    include: {
+                        metadata: true,
+                        hashtags: true,
+                        people: true,
+                    }
                 },
                 user: {
                     select: { name: true }
@@ -78,12 +112,21 @@ const albumRepository = {
             data: {
                 title: data.title,
                 description: data.description,
+                eventType: data.eventType,
+                date: data.date,
+                location: data.location,
                 items: data.itemIds ? {
                     set: data.itemIds.map(itemId => ({ id: itemId })),
                 } : undefined,
             },
             include: {
-                items: true,
+                items: {
+                    include: {
+                        metadata: true,
+                        hashtags: true,
+                        people: true,
+                    }
+                },
             },
         });
     },

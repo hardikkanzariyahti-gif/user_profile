@@ -36,6 +36,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
 const userRepository_1 = __importDefault(require("../repositories/userRepository"));
 const galleryRepository_1 = __importDefault(require("../repositories/galleryRepository"));
@@ -77,7 +78,7 @@ const userService = {
     async verifyFaceQuality(file) {
         const filePath = path.join(constants_1.UPLOADS_DIR, file.filename);
         try {
-            const descriptor = await faceAi_1.default.getFaceDescriptor(filePath);
+            const descriptor = await faceAi_1.default.getFaceDescriptor(filePath, { useOriginal: true });
             return {
                 isValid: !!descriptor,
                 message: !!descriptor ? 'Clear face detected!' : 'Face is too blurry or not clear enough. Please ensure good lighting and look straight at the camera.'
@@ -91,14 +92,78 @@ const userService = {
     async updateUser(id, body, files = []) {
         const userId = normalizeUserId(id);
         const updates = (0, userValidators_1.validateUpdateUserInput)(body);
+        if (!files || files.length === 0) {
+            // If there are NO files uploaded but we require at least one for face logic
+            // (This assumes profile enrollment requires an image if updating profile form)
+            // Note: If updates only contain name/email, we shouldn't throw. 
+            // But if profile_pictures was intended, it's checked here.
+        }
         if (files && files.length > 0) {
-            // ── PARALLEL VALIDATION ──────────────────────────────────────────────
-            const validationResults = await Promise.all(files.map(async (file) => {
+            // ── SEQUENTIAL FALLBACK MULTI-ANGLE VALIDATION ─────────────────────────
+            const validationResults = [];
+            for (const file of files) {
                 const filePath = path.join(constants_1.UPLOADS_DIR, file.filename);
-                const data = await faceAi_1.default.detectFaces(filePath);
-                const faces = data.faces || [];
-                return { file, hasFace: faces.length > 0, faces, data };
-            }));
+                const fileExists = fs.existsSync(filePath);
+                const stats = fileExists ? fs.statSync(filePath) : null;
+                console.log(`[PROFILE_FACE] image path: ${filePath}`);
+                console.log(`[PROFILE_FACE] image exists: ${fileExists}`);
+                console.log(`[PROFILE_FACE] image size: ${stats ? stats.size : 0} bytes`);
+                if (!fileExists || !stats || stats.size === 0) {
+                    console.log(`[PROFILE_FACE] detected faces count: 0`);
+                    console.log(`[PROFILE_FACE] descriptor generated: false`);
+                    console.log(`[PROFILE_FACE] error: File does not exist or is empty`);
+                    validationResults.push({ file, hasFace: false, faces: [], data: null });
+                    continue;
+                }
+                // Pass 1: Try on original uncompressed high-quality image
+                let data = await faceAi_1.default.detectFaces(filePath, { useOriginal: true });
+                let faces = data?.faces || [];
+                let fallbackPass = 'Original';
+                // Pass 2: Try resized 1600 version
+                if (faces.length === 0) {
+                    console.log(`[PROFILE_FACE] 0 faces on original, trying 1600px resize...`);
+                    data = await faceAi_1.default.detectFaces(filePath, { targetW: 1600, targetH: 1600 });
+                    faces = data?.faces || [];
+                    fallbackPass = 'Resize 1600';
+                }
+                // Pass 3: Try contrast normalized image
+                if (faces.length === 0) {
+                    console.log(`[PROFILE_FACE] 0 faces on resize, trying contrast normalized version...`);
+                    data = await faceAi_1.default.detectFaces(filePath, { targetW: 1280, targetH: 1280, applyContrast: true });
+                    faces = data?.faces || [];
+                    fallbackPass = 'Contrast Normalization';
+                }
+                console.log(`[PROFILE_FACE] detected faces count (${fallbackPass}): ${faces.length}`);
+                let mainFace = null;
+                let desc = null;
+                let errorMsg = 'None';
+                if (faces.length > 0) {
+                    // If multiple faces, choose largest face for profile descriptor
+                    faces.sort((a, b) => (b.box._width * b.box._height) - (a.box._width * a.box._height));
+                    mainFace = faces[0];
+                    desc = faceAi_1.default.serializeDescriptor(mainFace.descriptor);
+                    if (!desc || (desc.length !== 128 && desc.length !== 512)) {
+                        errorMsg = `Invalid descriptor length ${desc ? desc.length : 'null'}`;
+                    }
+                }
+                else {
+                    errorMsg = 'No face detected in this photo after all fallbacks';
+                }
+                const isSuccess = !!desc && errorMsg === 'None';
+                console.log(`[PROFILE_FACE] descriptor generated: ${isSuccess}`);
+                if (!isSuccess) {
+                    console.log(`[PROFILE_FACE] error: ${errorMsg}`);
+                }
+                else {
+                    console.log(`[PROFILE_FACE] error: none`);
+                }
+                validationResults.push({
+                    file,
+                    hasFace: isSuccess,
+                    faces: mainFace ? [mainFace] : [],
+                    data
+                });
+            }
             const validFiles = validationResults.filter(r => r.hasFace).map(r => r.file);
             const failedLabels = validationResults
                 .filter(r => !r.hasFace)
@@ -107,7 +172,13 @@ const userService = {
                 console.log(`[userService] Skipping angles with no face: ${failedLabels.join(', ')}`);
             }
             if (validFiles.length === 0) {
-                throw (0, httpError_1.default)(400, 'No face detected in any of your photos. Please ensure your face is clearly visible in at least one image.');
+                const pathFailed = validationResults.some(r => r.data === null);
+                if (pathFailed) {
+                    throw (0, httpError_1.default)(400, 'Face photos could not be loaded. Please try uploading again.');
+                }
+                else {
+                    throw (0, httpError_1.default)(400, 'No clear face detected. Please retake with better lighting.');
+                }
             }
             files = validFiles;
             updates.profile_picture = (0, urlUtils_1.buildUploadUrl)(files[0].filename);
@@ -121,7 +192,6 @@ const userService = {
                     if (desc.length !== 512 && desc.length !== 128) {
                         console.warn(`[Profile Enrolment] Embedding length ${desc.length} is invalid for user ${userId}`);
                     }
-                    // Profile Enrollment Debug log as requested:
                     console.log(`[Profile Debug] userId: ${userId}, face detected: yes, face count: ${vr.faces.length}, embedding length: ${desc.length}, crop size: ${mainFace.box._width}x${mainFace.box._height}, quality score: ${mainFace.confidence}`);
                     profileDescriptors.push({
                         descriptor: desc,

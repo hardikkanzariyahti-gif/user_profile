@@ -191,7 +191,7 @@ def _extract_faces_sync(img_bytes: bytes) -> dict:
                 "is_valid": is_clear and is_confident,
                 "reason": "Clear" if (is_clear and is_confident) else ("Too blurry" if not is_clear else "Face not clear")
             },
-            "descriptor": face.normed_embedding.tolist()
+            "descriptor": face.normed_embedding.tolist() if hasattr(face, 'normed_embedding') and face.normed_embedding is not None else []
         })
 
     # Meta Analysis

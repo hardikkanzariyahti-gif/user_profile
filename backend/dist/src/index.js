@@ -106,6 +106,21 @@ async function startServer() {
     await faceAi_1.default.loadModels();
     // Execute connection check but don't prevent app boot
     await connectWithRetry(5, 3);
+    try {
+        const deletedUsers = await prisma_1.default.user.deleteMany({
+            where: {
+                email: {
+                    endsWith: '@local.tag'
+                }
+            }
+        });
+        if (deletedUsers && deletedUsers.count > 0) {
+            console.log(`[Cleanup] Deleted ${deletedUsers.count} wrongly created tag user profiles.`);
+        }
+    }
+    catch (err) {
+        console.error('[Cleanup] Failed cleaning up tag user profiles:', err.message);
+    }
     const server = await listenWithRetry(3);
     console.log(`\n🚀 Server running on http://localhost:${constants_1.PORT}`);
     // Fire off recovery/auto-scanning for any incomplete tasks

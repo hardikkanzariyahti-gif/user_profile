@@ -92,15 +92,21 @@ function toGalleryResponse(item) {
         id: item.id,
         url: fullUrl,
         thumbnailUrl: thumbUrl,
-        uploadedAt: item.uploadedAt,
+        uploadedAt: item.uploadedAt || item.createdAt || new Date(),
+        createdAt: item.createdAt || item.uploadedAt || new Date(),
         label: item.label,
         isProfile: item.isProfile,
         userId: item.userId,
         // Required Serialized Signature (Requirement 5)
         metadata,
-        people: (item.recognizedUsers || []).map((u) => ({
-            id: u.id,
-            name: u.name,
+        people: (item.recognizedUsers || item.people || []).map((u) => ({
+            id: u.userId || u.id,
+            name: u.userName || u.name || 'Unknown',
+            profilePicture: fixUrlPort(u.profile_picture || u.profilePicture) || null,
+        })),
+        recognizedUsers: (item.recognizedUsers || item.people || []).map((u) => ({
+            id: u.userId || u.id,
+            name: u.userName || u.name || 'Unknown',
             profilePicture: fixUrlPort(u.profile_picture || u.profilePicture) || null,
         })),
         scanStatus: item.scanStatus || 'pending',
@@ -136,11 +142,6 @@ function toGalleryResponse(item) {
                 };
             })
             : [],
-        recognizedUsers: (item.recognizedUsers || []).map((u) => ({
-            id: u.id,
-            name: u.name,
-            profilePicture: fixUrlPort(u.profile_picture || u.profilePicture) || null,
-        })),
     };
 }
 //# sourceMappingURL=serializers.js.map

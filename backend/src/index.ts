@@ -14,7 +14,7 @@ async function connectWithRetry(maxAttempts = 5, delaySeconds = 3): Promise<bool
   const hasUrl = !!process.env.DATABASE_URL;
   console.log(`DATABASE_URL provided: ${hasUrl ? '✅ YES' : '❌ NO'}`);
   console.log(`NODE_ENV: ${process.env.NODE_ENV || 'development'}`);
-  
+
   if (!hasUrl) {
     console.error("Prisma initialization cancelled: DATABASE_URL is missing.");
     return false;
@@ -22,7 +22,7 @@ async function connectWithRetry(maxAttempts = 5, delaySeconds = 3): Promise<bool
 
   const match = process.env.DATABASE_URL!.match(/@([^:]+:[0-9]+)\//);
   const targetHost = match ? match[1] : 'unknown-host';
-  
+
   console.log(`Prisma connection started. Attempting to reach: ${targetHost}`);
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -37,7 +37,7 @@ async function connectWithRetry(maxAttempts = 5, delaySeconds = 3): Promise<bool
       console.error(`❌ Prisma connection attempt ${attempt} failed.`);
       const msg = error.message || String(error);
       console.error(`   Error summary: ${msg.substring(0, 120).replace(/\n/g, ' ')}...`);
-      
+
       if (attempt < maxAttempts) {
         console.log(`   Waiting ${delaySeconds}s before next retry...`);
         await new Promise(res => setTimeout(res, delaySeconds * 1000));
@@ -102,9 +102,24 @@ async function listenWithRetry(maxRetries = 3): Promise<ReturnType<typeof app.li
 
 async function startServer(): Promise<void> {
   await faceAi.loadModels();
-  
+
   // Execute connection check but don't prevent app boot
   await connectWithRetry(5, 3);
+
+  try {
+    const deletedUsers = await prisma.user.deleteMany({
+      where: {
+        email: {
+          endsWith: '@local.tag'
+        }
+      }
+    });
+    if (deletedUsers && deletedUsers.count > 0) {
+      console.log(`[Cleanup] Deleted ${deletedUsers.count} wrongly created tag user profiles.`);
+    }
+  } catch (err: any) {
+    console.error('[Cleanup] Failed cleaning up tag user profiles:', err.message);
+  }
 
   const server = await listenWithRetry(3);
   console.log(`\n🚀 Server running on http://localhost:${PORT}`);

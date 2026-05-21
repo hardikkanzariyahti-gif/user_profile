@@ -46,6 +46,7 @@ declare const galleryRepository: {
             generatedAt: Date | null;
             metadataVersion: number | null;
             lastMetaError: string | null;
+            metadataEditedByUser: boolean | null;
         } | null;
         hashtags: {
             name: string;
@@ -86,6 +87,7 @@ declare const galleryRepository: {
             generatedAt: Date | null;
             metadataVersion: number | null;
             lastMetaError: string | null;
+            metadataEditedByUser: boolean | null;
         } | null;
         hashtags: {
             name: string;
@@ -126,6 +128,7 @@ declare const galleryRepository: {
             generatedAt: Date | null;
             metadataVersion: number | null;
             lastMetaError: string | null;
+            metadataEditedByUser: boolean | null;
         } | null;
         hashtags: {
             name: string;
@@ -166,6 +169,7 @@ declare const galleryRepository: {
             generatedAt: Date | null;
             metadataVersion: number | null;
             lastMetaError: string | null;
+            metadataEditedByUser: boolean | null;
         } | null;
         hashtags: {
             name: string;
@@ -206,6 +210,7 @@ declare const galleryRepository: {
             generatedAt: Date | null;
             metadataVersion: number | null;
             lastMetaError: string | null;
+            metadataEditedByUser: boolean | null;
         } | null;
         hashtags: {
             name: string;
@@ -246,6 +251,7 @@ declare const galleryRepository: {
             generatedAt: Date | null;
             metadataVersion: number | null;
             lastMetaError: string | null;
+            metadataEditedByUser: boolean | null;
         } | null;
         hashtags: {
             name: string;

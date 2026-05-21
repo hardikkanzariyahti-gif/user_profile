@@ -19,6 +19,7 @@ declare const galleryService: {
         url: string | null | undefined;
         thumbnailUrl: string | null | undefined;
         uploadedAt: Date;
+        createdAt: any;
         label: string | null | undefined;
         isProfile: boolean;
         userId: number | null | undefined;
@@ -53,11 +54,8 @@ declare const galleryService: {
             lastScanError: any;
             lastMetaError: any;
         };
-        people: {
-            id: any;
-            name: any;
-            profilePicture: string | null;
-        }[];
+        people: any;
+        recognizedUsers: any;
         scanStatus: string;
         metadataStatus: string;
         lastScanError: any;
@@ -77,11 +75,6 @@ declare const galleryService: {
             status: any;
             confidence: any;
             reason: any;
-        }[];
-        recognizedUsers: {
-            id: any;
-            name: any;
-            profilePicture: string | null;
         }[];
     }[]>;
     getGalleryItem(id: number): Promise<{
@@ -89,6 +82,7 @@ declare const galleryService: {
         url: string | null | undefined;
         thumbnailUrl: string | null | undefined;
         uploadedAt: Date;
+        createdAt: any;
         label: string | null | undefined;
         isProfile: boolean;
         userId: number | null | undefined;
@@ -123,11 +117,8 @@ declare const galleryService: {
             lastScanError: any;
             lastMetaError: any;
         };
-        people: {
-            id: any;
-            name: any;
-            profilePicture: string | null;
-        }[];
+        people: any;
+        recognizedUsers: any;
         scanStatus: string;
         metadataStatus: string;
         lastScanError: any;
@@ -147,11 +138,6 @@ declare const galleryService: {
             status: any;
             confidence: any;
             reason: any;
-        }[];
-        recognizedUsers: {
-            id: any;
-            name: any;
-            profilePicture: string | null;
         }[];
     }>;
     deleteGalleryItem(id: number): Promise<{
@@ -162,6 +148,7 @@ declare const galleryService: {
         url: string | null | undefined;
         thumbnailUrl: string | null | undefined;
         uploadedAt: Date;
+        createdAt: any;
         label: string | null | undefined;
         isProfile: boolean;
         userId: number | null | undefined;
@@ -196,11 +183,8 @@ declare const galleryService: {
             lastScanError: any;
             lastMetaError: any;
         };
-        people: {
-            id: any;
-            name: any;
-            profilePicture: string | null;
-        }[];
+        people: any;
+        recognizedUsers: any;
         scanStatus: string;
         metadataStatus: string;
         lastScanError: any;
@@ -220,11 +204,6 @@ declare const galleryService: {
             status: any;
             confidence: any;
             reason: any;
-        }[];
-        recognizedUsers: {
-            id: any;
-            name: any;
-            profilePicture: string | null;
         }[];
     }>;
     setGalleryItemCustomMetadata(id: number, customLocation: string, customEvent: string): Promise<{
@@ -232,6 +211,7 @@ declare const galleryService: {
         url: string | null | undefined;
         thumbnailUrl: string | null | undefined;
         uploadedAt: Date;
+        createdAt: any;
         label: string | null | undefined;
         isProfile: boolean;
         userId: number | null | undefined;
@@ -266,11 +246,8 @@ declare const galleryService: {
             lastScanError: any;
             lastMetaError: any;
         };
-        people: {
-            id: any;
-            name: any;
-            profilePicture: string | null;
-        }[];
+        people: any;
+        recognizedUsers: any;
         scanStatus: string;
         metadataStatus: string;
         lastScanError: any;
@@ -290,11 +267,6 @@ declare const galleryService: {
             status: any;
             confidence: any;
             reason: any;
-        }[];
-        recognizedUsers: {
-            id: any;
-            name: any;
-            profilePicture: string | null;
         }[];
     }>;
     searchGalleryByHashtag(rawTag: string): Promise<{
@@ -302,6 +274,7 @@ declare const galleryService: {
         url: string | null | undefined;
         thumbnailUrl: string | null | undefined;
         uploadedAt: Date;
+        createdAt: any;
         label: string | null | undefined;
         isProfile: boolean;
         userId: number | null | undefined;
@@ -336,11 +309,8 @@ declare const galleryService: {
             lastScanError: any;
             lastMetaError: any;
         };
-        people: {
-            id: any;
-            name: any;
-            profilePicture: string | null;
-        }[];
+        people: any;
+        recognizedUsers: any;
         scanStatus: string;
         metadataStatus: string;
         lastScanError: any;
@@ -361,82 +331,81 @@ declare const galleryService: {
             confidence: any;
             reason: any;
         }[];
-        recognizedUsers: {
-            id: any;
-            name: any;
-            profilePicture: string | null;
-        }[];
     }[]>;
-    uploadGallery(files?: any[], userId?: any): Promise<{
-        id: number;
-        url: string | null | undefined;
-        thumbnailUrl: string | null | undefined;
-        uploadedAt: Date;
-        label: string | null | undefined;
-        isProfile: boolean;
-        userId: number | null | undefined;
-        metadata: {
-            description: any;
-            aiSummary: any;
-            scene: any;
-            detectedObjects: any;
-            hashtags: any;
-            ocrText: any;
-            peopleCount: any;
-            eventName: any;
-            location: any;
-            dominantColor: any;
-            aspectRatio: any;
-            customDetails: {
+    uploadGallery(files?: any[], userId?: any, eventInfo?: {
+        eventName?: string;
+        location?: string;
+        date?: string;
+        description?: string;
+        eventId?: number;
+        tags?: string[];
+    }): Promise<{
+        gallery: {
+            id: number;
+            url: string | null | undefined;
+            thumbnailUrl: string | null | undefined;
+            uploadedAt: Date;
+            createdAt: any;
+            label: string | null | undefined;
+            isProfile: boolean;
+            userId: number | null | undefined;
+            metadata: {
+                description: any;
+                aiSummary: any;
+                scene: any;
+                detectedObjects: any;
+                hashtags: any;
+                ocrText: any;
+                peopleCount: any;
+                eventName: any;
+                location: any;
+                dominantColor: any;
+                aspectRatio: any;
+                customDetails: {
+                    dominant_color: any;
+                    aspect_ratio: any;
+                    orientation: any;
+                    generatedAt: any;
+                    metadataVersion: any;
+                };
+                objects: any;
+                scenes: any;
+                caption: any;
+                person_count: any;
                 dominant_color: any;
                 aspect_ratio: any;
                 orientation: any;
-                generatedAt: any;
-                metadataVersion: any;
+                customLocation: any;
+                customEvent: any;
+                lastScanError: any;
+                lastMetaError: any;
             };
-            objects: any;
-            scenes: any;
-            caption: any;
-            person_count: any;
-            dominant_color: any;
-            aspect_ratio: any;
-            orientation: any;
-            customLocation: any;
-            customEvent: any;
+            people: any;
+            recognizedUsers: any;
+            scanStatus: string;
+            metadataStatus: string;
             lastScanError: any;
             lastMetaError: any;
-        };
-        people: {
-            id: any;
-            name: any;
-            profilePicture: string | null;
+            recognizedUserIds: number[];
+            hashtags: any;
+            objectTags: any;
+            sceneTags: any;
+            ocrText: any;
+            faces: {
+                faceId: string;
+                box: any;
+                expandedBox: any;
+                personId: any;
+                personName: any;
+                similarity: any;
+                status: any;
+                confidence: any;
+                reason: any;
+            }[];
         }[];
-        scanStatus: string;
-        metadataStatus: string;
-        lastScanError: any;
-        lastMetaError: any;
-        recognizedUserIds: number[];
-        hashtags: any;
-        objectTags: any;
-        sceneTags: any;
-        ocrText: any;
-        faces: {
-            faceId: string;
-            box: any;
-            expandedBox: any;
-            personId: any;
-            personName: any;
-            similarity: any;
-            status: any;
-            confidence: any;
-            reason: any;
-        }[];
-        recognizedUsers: {
-            id: any;
-            name: any;
-            profilePicture: string | null;
-        }[];
-    }[]>;
+        albumId: number | null;
+        uploadedItemIds: number[];
+    }>;
     forceScanItem(galleryItemId: number): Promise<{
         message: string;
         skipped: boolean;
@@ -458,8 +427,20 @@ declare const galleryService: {
         message: string;
         profilePictureSet: boolean;
     }>;
+    bulkTagAndAlbum(itemIds: number[], targetUserId: number | null | undefined, currentUserId: number, targetTagName?: string | null): Promise<{
+        success: boolean;
+        message: string;
+        albumId: number;
+        albumTitle: string;
+    }>;
     untagFace(galleryItemId: number, userId: number, faceIndex?: number): Promise<{
         message: string;
+    }>;
+    getProcessingStatus(): Promise<{
+        isProcessing: boolean;
+        total: number;
+        completed: number;
+        stage: "Upload" | "Face" | "Metadata" | "Complete";
     }>;
     syncState: {
         isScanning: boolean;
@@ -599,6 +580,7 @@ declare const galleryService: {
         url: string | null | undefined;
         thumbnailUrl: string | null | undefined;
         uploadedAt: Date;
+        createdAt: any;
         label: string | null | undefined;
         isProfile: boolean;
         userId: number | null | undefined;
@@ -633,11 +615,8 @@ declare const galleryService: {
             lastScanError: any;
             lastMetaError: any;
         };
-        people: {
-            id: any;
-            name: any;
-            profilePicture: string | null;
-        }[];
+        people: any;
+        recognizedUsers: any;
         scanStatus: string;
         metadataStatus: string;
         lastScanError: any;
@@ -658,11 +637,6 @@ declare const galleryService: {
             confidence: any;
             reason: any;
         }[];
-        recognizedUsers: {
-            id: any;
-            name: any;
-            profilePicture: string | null;
-        }[];
     }>;
     processGalleryImageDirect(imageId: number, isForceScan?: boolean, isForceMeta?: boolean): Promise<void>;
     generateMetadataForImage(imageId: number, forceRegenerateAI?: boolean): Promise<any>;
@@ -672,6 +646,17 @@ declare const galleryService: {
         count: number;
     }>;
     initializeQueue(): Promise<void>;
+    cancelProcessing(): Promise<{
+        success: boolean;
+        message: string;
+        activeCancelled: number;
+        queuedCancelled: number;
+        cleanedCount: number;
+        affectedDetails: {
+            id: number;
+            url: string;
+        }[];
+    }>;
 };
 export { galleryService, buildLabeledDescriptors };
 export default galleryService;

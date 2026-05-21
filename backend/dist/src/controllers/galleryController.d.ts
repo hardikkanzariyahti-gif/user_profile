@@ -10,6 +10,7 @@ declare const galleryController: {
     upload(req: Request, res: Response): Promise<void>;
     refreshRecognition(req: Request, res: Response): Promise<void>;
     syncStatus(req: Request, res: Response): Promise<void>;
+    getProcessingStatus(req: Request, res: Response): Promise<void>;
     syncEvents(req: Request, res: Response): Promise<void>;
     tagFace(req: Request, res: Response): Promise<void>;
     untagFace(req: Request, res: Response): Promise<void>;
@@ -25,6 +26,8 @@ declare const galleryController: {
     metadataRetry(req: Request, res: Response): Promise<void>;
     backfillMetadata(req: Request, res: Response): Promise<void>;
     getBackfillStatus(req: Request, res: Response): Promise<void>;
+    bulkTagAndAlbum(req: Request, res: Response): Promise<void>;
+    cancelProcessing(req: Request, res: Response): Promise<void>;
 };
 export default galleryController;
 //# sourceMappingURL=galleryController.d.ts.map

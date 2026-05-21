@@ -126,6 +126,12 @@ const ProfileForm: React.FC<ProfileFormProps> = ({ mode = 'create' }) => {
     e.preventDefault();
     if (!validate()) return;
 
+    const hasAnyImage = angles.some(a => enrollment[a.id].file || enrollment[a.id].preview);
+    if (!hasAnyImage && mode === 'create') {
+      setMessage({ type: 'error', text: 'Please upload at least one face photo.' });
+      return;
+    }
+
     setLoading(true);
     setMessage(null);
     setFailedAngles([]);
@@ -297,7 +303,7 @@ const ProfileForm: React.FC<ProfileFormProps> = ({ mode = 'create' }) => {
                   <div className="flex gap-2" style={{ display: 'flex', gap: '0.4rem' }}>
                     <button
                       type="button"
-                      onClick={() => setActiveAngle(angle.id)}
+                      onClick={() => { setActiveAngle(angle.id); setMessage(null); }}
                       className="btn btn-outline btn-sm"
                       style={{ padding: '0.4rem', minWidth: 'auto' }}
                       title="Use Camera"
@@ -342,8 +348,8 @@ const ProfileForm: React.FC<ProfileFormProps> = ({ mode = 'create' }) => {
                   fontSize: '0.85rem',
                   color: '#60a5fa'
                 }}>
-                  <AlertCircle size={18} />
-                  <span><b>Guidance:</b> Ensure your face is well-lit and clearly visible. Avoid shadows or blur for the best AI accuracy.</span>
+                  <AlertCircle size={18} style={{ flexShrink: 0 }} />
+                  <span><b>Step: Capture {angles.find(a => a.id === activeAngle)?.label}</b> — Ensure your face is well-lit and clearly visible. Avoid shadows or blur for the best AI accuracy.</span>
                 </div>
                 <CameraCapture
                   onCapture={handleCameraCapture}
@@ -382,7 +388,7 @@ const ProfileForm: React.FC<ProfileFormProps> = ({ mode = 'create' }) => {
         </form>
       </div>
 
-      {message && (
+      {!activeAngle && message && (
         <div className="message-toast" style={{
           backgroundColor: message.type === 'error' ? 'var(--error)' : 'var(--success)',
           zIndex: 2000

@@ -73,6 +73,7 @@ model ImageMetadata {
   generatedAt     DateTime?
   metadataVersion Int?        @default(1)
   lastMetaError   String?
+  metadataEditedByUser Boolean? @default(false)
 
   galleryItem   GalleryItem @relation(fields: [galleryItemId], references: [id], onDelete: Cascade)
 }
@@ -99,6 +100,9 @@ model Album {
   id                 Int                  @id @default(autoincrement())
   title              String
   description        String?
+  eventType          String?
+  date               String?
+  location           String?
   isGlobal           Boolean              @default(true)
   shareId            String               @unique @default(dbgenerated("gen_random_uuid()"))
   createdAt          DateTime             @default(now())

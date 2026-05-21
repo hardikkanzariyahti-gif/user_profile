@@ -10,6 +10,8 @@ router.post('/', upload.array('gallery', 10), asyncHandler(galleryController.upl
 router.get('/suggest/:id', asyncHandler(galleryController.getTagSuggestions));
 router.post('/refresh', asyncHandler(galleryController.refreshRecognition));
 router.get('/sync-status', asyncHandler(galleryController.syncStatus));
+router.get('/processing-status', asyncHandler(galleryController.getProcessingStatus));
+router.post('/cancel-processing', asyncHandler(galleryController.cancelProcessing));
 
 // ── Metadata Backfill (new canonical paths) ──────────────────────────────────
 router.post('/metadata/backfill', asyncHandler(galleryController.backfillMetadata));
@@ -20,6 +22,7 @@ router.post('/generate-missing-metadata', asyncHandler(galleryController.backfil
 router.get('/sync-events', asyncHandler(galleryController.syncEvents));
 router.post('/tag-face', asyncHandler(galleryController.tagFace));
 router.post('/untag-face', asyncHandler(galleryController.untagFace));
+router.post('/bulk-tag-and-album', asyncHandler(galleryController.bulkTagAndAlbum));
 router.get('/clusters', asyncHandler(galleryController.getClusters));
 router.post('/clusters/merge', asyncHandler(galleryController.mergeCluster));
 router.post('/profile-picture-from-gallery', asyncHandler(galleryController.setProfilePictureFromGalleryItem));
