@@ -4,6 +4,7 @@ import { UserCircle, MapPin, AppWindow, Loader2, CheckCircle2, X, Image as Image
 import { motion, AnimatePresence } from 'framer-motion';
 import { uploadGallery, fetchImageStatus } from './services/galleryService';
 import { MiniSearchBar } from './components/MiniSearchBar';
+import Sidebar from './components/Sidebar';
 import UserList from './pages/UserList';
 import ProfileForm from './pages/ProfileForm';
 import Gallery from './pages/Gallery';
@@ -22,34 +23,6 @@ interface UserProfile {
 }
 
 import People from './pages/People';
-
-interface NavigationProps {
-  loggedInUser: UserProfile | null;
-}
-
-const Navigation: React.FC<NavigationProps> = () => {
-  const location = useLocation();
-  return (
-    <nav className="nav-links">
-      <Link to="/gallery" className={`nav-link ${location.pathname === '/gallery' ? 'active' : ''}`}>
-        <ImageIcon size={15} />
-        <span>Gallery</span>
-      </Link>
-      <Link to="/albums" className={`nav-link ${location.pathname.startsWith('/albums') ? 'active' : ''}`}>
-        <Album size={15} />
-        <span>Albums</span>
-      </Link>
-      <Link to="/people" className={`nav-link ${location.pathname === '/people' ? 'active' : ''}`}>
-        <Users size={15} />
-        <span>People</span>
-      </Link>
-      <Link to="/" className={`nav-link ${location.pathname === '/' ? 'active' : ''}`}>
-        <UserCircle size={15} />
-        <span>Profiles</span>
-      </Link>
-    </nav>
-  );
-};
 
 interface HeaderActionsProps {
   loggedInUser: UserProfile | null;
@@ -84,17 +57,10 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({ loggedInUser, handleLogou
           onClick={() => setDropdownOpen(!dropdownOpen)}
           className="btn btn-primary"
           style={{
-            height: '42px',
-            borderRadius: '99px',
-            padding: '0 1.25rem',
             display: 'flex',
             alignItems: 'center',
             gap: '0.5rem',
-            fontSize: '0.9rem',
-            fontWeight: 600,
             cursor: 'pointer',
-            boxShadow: '0 4px 12px rgba(99, 102, 241, 0.2)',
-            transition: 'all 0.2s ease',
           }}
         >
           <Plus size={16} />
@@ -102,43 +68,36 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({ loggedInUser, handleLogou
           <ChevronDown size={14} style={{ transform: dropdownOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }} />
         </button>
 
-        <AnimatePresence>
-          {dropdownOpen && (
-            <motion.div
-              initial={{ opacity: 0, y: 10, scale: 0.95 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: 10, scale: 0.95 }}
-              transition={{ duration: 0.15 }}
-              style={{
-                position: 'absolute',
-                top: 'calc(100% + 8px)',
-                right: 0,
-                width: '180px',
-                background: 'white',
-                borderRadius: '16px',
-                padding: '0.5rem',
-                boxShadow: '0 10px 25px rgba(0,0,0,0.1), 0 0 0 1px rgba(0,0,0,0.05)',
-                zIndex: 9999,
-              }}
-            >
+         <AnimatePresence>
+           {dropdownOpen && (
+             <motion.div
+               initial={{ opacity: 0, y: 10, scale: 0.95 }}
+               animate={{ opacity: 1, y: 0, scale: 1 }}
+               exit={{ opacity: 0, y: 10, scale: 0.95 }}
+               transition={{ duration: 0.15 }}
+               style={{
+                 position: 'absolute',
+                 top: 'calc(100% + 8px)',
+                 right: 0,
+                 width: '180px',
+                 background: 'white',
+                 borderRadius: '16px',
+                 padding: '0.5rem',
+                 boxShadow: '0 10px 25px rgba(0,0,0,0.15), 0 0 0 1px rgba(0,0,0,0.08)',
+                 zIndex: 99999,
+                 // Ensure container doesn't clip the dropdown
+                 pointerEvents: 'auto'
+               }}
+             >
               <button
                 onClick={() => handleAction('upload')}
+                className="btn btn-outline"
                 style={{
                   width: '100%',
-                  height: '38px',
-                  padding: '0 0.75rem',
-                  borderRadius: '10px',
+                  justifyContent: 'flex-start',
                   border: 'none',
                   background: 'transparent',
                   color: 'var(--text-main)',
-                  fontSize: '0.88rem',
-                  fontWeight: 500,
-                  textAlign: 'left',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.6rem',
-                  cursor: 'pointer',
-                  transition: 'background 0.15s',
                 }}
                 onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(0,0,0,0.04)'}
                 onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
@@ -148,22 +107,13 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({ loggedInUser, handleLogou
               </button>
               <button
                 onClick={() => handleAction('camera')}
+                className="btn btn-outline"
                 style={{
                   width: '100%',
-                  height: '38px',
-                  padding: '0 0.75rem',
-                  borderRadius: '10px',
+                  justifyContent: 'flex-start',
                   border: 'none',
                   background: 'transparent',
                   color: 'var(--text-main)',
-                  fontSize: '0.88rem',
-                  fontWeight: 500,
-                  textAlign: 'left',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.6rem',
-                  cursor: 'pointer',
-                  transition: 'background 0.15s',
                 }}
                 onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(0,0,0,0.04)'}
                 onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
@@ -185,15 +135,6 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({ loggedInUser, handleLogou
           <button
             onClick={handleLogout}
             className="btn btn-outline"
-            style={{
-              height: '42px',
-              borderRadius: '99px',
-              padding: '0 1.25rem',
-              fontSize: '0.9rem',
-              fontWeight: 600,
-              cursor: 'pointer',
-              transition: 'all 0.2s',
-            }}
           >
             Logout
           </button>
@@ -201,28 +142,12 @@ const HeaderActions: React.FC<HeaderActionsProps> = ({ loggedInUser, handleLogou
       ) : (
         <Link
           to="/login"
-          className="btn btn-outline"
+          className="btn btn-primary"
           style={{
-            height: '42px',
-            borderRadius: '99px',
-            padding: '0 1.5rem',
-            border: '2px solid var(--primary)',
-            color: 'var(--primary)',
-            background: 'transparent',
             textDecoration: 'none',
             display: 'inline-flex',
             alignItems: 'center',
             justifyContent: 'center',
-            fontWeight: 700,
-            fontSize: '0.9rem',
-            boxShadow: 'none',
-            transition: 'all 0.2s ease',
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = 'rgba(99, 102, 241, 0.08)';
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = 'transparent';
           }}
         >
           Login
@@ -377,35 +302,41 @@ function App() {
     }
   }, [loggedInUser]);
 
-  return (
-    <BrowserRouter>
-      <main className="app-container">
-        <header className="header">
-          <div className="header-container">
-            <div className="nav-wrapper" style={{ flex: 1, display: 'flex', alignItems: 'center' }}>
-              <Navigation loggedInUser={loggedInUser} />
-              <MiniSearchBar />
-              <HeaderActions loggedInUser={loggedInUser} handleLogout={handleLogout} />
-            </div>
-          </div>
-        </header>
+  const AppLayout: React.FC = () => {
+    const location = useLocation();
+    const isLogin = location.pathname === '/login';
+
+    return (
+      <div style={{ display: 'flex', minHeight: '100vh' }}>
+        {!isLogin && <Sidebar />}
+        <div style={{ flex: 1, marginLeft: isLogin ? 0 : '200px', minWidth: 0 }}>
+          <main className="app-container" style={{ paddingTop: 0 }}>
+            {!isLogin && (
+              <header className="header" style={{ marginTop: '1rem' }}>
+                <div className="header-container">
+                  <div className="nav-wrapper" style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
+                    <HeaderActions loggedInUser={loggedInUser} handleLogout={handleLogout} />
+                  </div>
+                </div>
+              </header>
+            )}
 
 
-        <Routes>
-          <Route path="/" element={<UserList onLogin={handleLogin} loggedInUser={loggedInUser} />} />
-          <Route path="/login" element={<Login onLogin={handleLogin} />} />
-          <Route path="/create" element={<ProfileForm mode="create" />} />
-          <Route path="/update/:id" element={<ProfileForm mode="update" />} />
-          <Route path="/gallery" element={<Gallery loggedInUser={loggedInUser} startBackgroundUpload={startBackgroundUpload} />} />
-          <Route path="/people" element={<People />} />
-          <Route path="/search" element={<Search />} />
-          <Route path="/tags/:tag" element={<TagResults />} />
-          <Route path="/albums" element={<Albums loggedInUser={loggedInUser} />} />
-          <Route path="/albums/:id" element={<AlbumDetail loggedInUser={loggedInUser} />} />
-          <Route path="/s/:shareId" element={<SharedAlbum />} />
-        </Routes>
+            <Routes>
+              <Route path="/" element={<UserList onLogin={handleLogin} loggedInUser={loggedInUser} />} />
+              <Route path="/login" element={<Login onLogin={handleLogin} />} />
+              <Route path="/create" element={<ProfileForm mode="create" />} />
+              <Route path="/update/:id" element={<ProfileForm mode="update" />} />
+              <Route path="/gallery" element={<Gallery loggedInUser={loggedInUser} startBackgroundUpload={startBackgroundUpload} />} />
+              <Route path="/people" element={<People />} />
+              <Route path="/search" element={<Search />} />
+              <Route path="/tags/:tag" element={<TagResults />} />
+              <Route path="/albums" element={<Albums loggedInUser={loggedInUser} />} />
+              <Route path="/albums/:id" element={<AlbumDetail loggedInUser={loggedInUser} />} />
+              <Route path="/s/:shareId" element={<SharedAlbum />} />
+            </Routes>
 
-        {/* FLOATING BACKGROUND PROGRESS PANEL */}
+            {/* FLOATING BACKGROUND PROGRESS PANEL */}
         <AnimatePresence>
           {bgUpload && (
             <motion.div
@@ -424,11 +355,11 @@ function App() {
               <div style={{ padding: '1rem 1.25rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(0,0,0,0.15)', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                   {bgUpload.phase === 'complete' ? (
-                    <CheckCircle2 size={18} style={{ color: '#10b981' }} />
+                    <CheckCircle2 size={16} style={{ color: '#10b981' }} />
                   ) : (
-                    <Loader2 size={18} className="spin" style={{ color: 'var(--primary)' }} />
+                    <Loader2 size={16} className="spin" style={{ color: '#9B96D4' }} />
                   )}
-                  <span style={{ fontSize: '0.8rem', fontWeight: 800, letterSpacing: '0.5px', textTransform: 'uppercase' }}>
+                  <span style={{ fontSize: '0.75rem', fontWeight: 700, letterSpacing: '0.3px', textTransform: 'uppercase' }}>
                     {bgUpload.eventName ? `EVENT: ${bgUpload.eventName}` : 'INGESTING ASSETS'}
                   </span>
                 </div>
@@ -525,6 +456,14 @@ function App() {
           &copy; 2026 ProProfile Inc.
         </footer>
       </main>
+          </div>
+        </div>
+    );
+  };
+
+  return (
+    <BrowserRouter>
+      <AppLayout />
     </BrowserRouter>
   );
 }

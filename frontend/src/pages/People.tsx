@@ -372,7 +372,6 @@ export default function People() {
               setMessage({ type: 'info', text: 'AI processing scans in background...' });
             }}
             className="btn btn-primary"
-            style={{ height: '40px', borderRadius: '10px', display: 'inline-flex', alignItems: 'center', gap: '0.5rem', fontWeight: 700, fontSize: '0.85rem' }}
           >
             <Combine size={16} /> Scan Library
           </button>
@@ -382,8 +381,8 @@ export default function People() {
       {loading ? (
         <div style={{ 
           display: 'grid', 
-          gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', 
-          gap: '2.5rem 1.5rem' 
+          gridTemplateColumns: 'repeat(auto-fill, minmax(110px, 1fr))', 
+          gap: '1.5rem 1rem' 
         }}>
           {[1,2,3,4,5,6,7,8,9,10].map(i => (
             <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px', opacity: 0.5 }}>
@@ -407,8 +406,8 @@ export default function People() {
             ) : (
               <div style={{ 
                 display: 'grid', 
-                gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', 
-                gap: '3rem 2rem' 
+                gridTemplateColumns: 'repeat(auto-fill, minmax(145px, 1fr))', 
+                gap: '1.5rem 1rem' 
               }}>
                 {filteredAndSortedUsers.map((user, idx) => (
                   <motion.div
@@ -439,10 +438,10 @@ export default function People() {
                         display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '8px',
                         opacity: 0, transition: 'opacity 0.2s ease'
                       }}>
-                        <button className="btn" style={{ background: '#ffffff', color: '#0f172a', border: 'none', borderRadius: '20px', padding: '6px 12px', fontSize: '0.75rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '4px' }} onClick={(e) => { e.stopPropagation(); handleOpenPersonDetail(user); }}>
+                        <button className="btn btn-primary" style={{ fontSize: '0.75rem', padding: '4px 10px', height: 'auto', minHeight: '28px' }} onClick={(e) => { e.stopPropagation(); handleOpenPersonDetail(user); }}>
                           <Eye size={14} /> View
                         </button>
-                        <button className="btn" style={{ background: 'rgba(255,255,255,0.2)', color: '#ffffff', border: '1px solid rgba(255,255,255,0.4)', borderRadius: '20px', padding: '6px 12px', fontSize: '0.75rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '4px' }} onClick={(e) => { e.stopPropagation(); /* TODO: Edit */ }}>
+                        <button className="btn btn-outline" style={{ fontSize: '0.75rem', padding: '4px 10px', height: 'auto', minHeight: '28px', background: 'rgba(255,255,255,0.15)', color: '#fff', borderColor: 'rgba(255,255,255,0.3)' }} onClick={(e) => { e.stopPropagation(); /* TODO: Edit */ }}>
                           <Combine size={14} /> Merge
                         </button>
                       </div>
@@ -467,7 +466,7 @@ export default function People() {
                 </h2>
                 <button 
                   onClick={handleResetIgnored}
-                  style={{ background: 'transparent', border: 'none', color: '#6366f1', fontSize: '0.8rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontWeight: 700 }}
+                  className="btn btn-outline"
                 >
                   <EyeOff size={14} /> Recover Ignored
                 </button>
@@ -475,8 +474,8 @@ export default function People() {
 
               <div style={{ 
                 display: 'grid', 
-                gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', 
-                gap: '3rem 2rem' 
+                gridTemplateColumns: 'repeat(auto-fill, minmax(145px, 1fr))', 
+                gap: '1.5rem 1rem' 
               }}>
                 {clusters.map((cluster, idx) => (
                   <motion.div
@@ -508,7 +507,7 @@ export default function People() {
                         display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
                         opacity: 0, transition: 'opacity 0.2s ease'
                       }}>
-                        <button className="btn" style={{ background: '#6366f1', color: '#ffffff', border: 'none', borderRadius: '20px', padding: '8px 16px', fontSize: '0.8rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px', boxShadow: '0 4px 6px -1px rgba(99,102,241,0.2)' }} onClick={(e) => { e.stopPropagation(); setSelectedCluster(cluster); }}>
+                        <button className="btn btn-primary" onClick={(e) => { e.stopPropagation(); setSelectedCluster(cluster); }}>
                           <UserPlus size={16} /> Assign
                         </button>
                       </div>
@@ -610,8 +609,8 @@ export default function People() {
                         </div>
                         <div style={{ 
                           display: 'grid', 
-                          gridTemplateColumns: 'repeat(auto-fill, minmax(165px, 1fr))', 
-                          gap: '1.25rem' 
+                          gridTemplateColumns: 'repeat(auto-fill, minmax(135px, 1fr))', 
+                          gap: '1rem' 
                         }}>
                           {group.items.map((item) => (
                             <motion.div

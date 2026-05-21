@@ -69,83 +69,131 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
   };
 
   return (
-    <div style={{ maxWidth: '400px', margin: '6vh auto', padding: '0 1.5rem' }}>
-      <div className="card" style={{ padding: '2.5rem' }}>
-        <div style={{ textAlign: 'center', marginBottom: '2.5rem' }}>
-          <div style={{
-            display: 'inline-flex',
-            background: 'rgba(99, 102, 241, 0.08)',
-            padding: '1.25rem',
-            borderRadius: '50%',
-            marginBottom: '1rem',
-            color: 'var(--primary)'
-          }}>
-            <LogIn size={32} />
+    <div style={{ position: 'fixed', top: 0, left: 0, width: '100%', height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'linear-gradient(135deg, rgb(59, 89, 152) 0%, rgb(106, 127, 188) 50%, rgb(155, 150, 212) 100%)' }}>
+      <div style={{ background: 'white', borderRadius: '24px', boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1), 0 10px 10px -5px rgba(0,0,0,0.04)', width: '100%', maxWidth: '420px', padding: '2.5rem' }}>
+        <div style={{ 
+          background: 'linear-gradient(135deg, rgb(59, 89, 152) 0%, rgb(106, 127, 188) 50%, rgb(155, 150, 212) 100%)', 
+          borderRadius: '20px 20px 0 0', 
+          padding: '2rem', 
+          color: 'white',
+          textAlign: 'center'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '1rem', marginBottom: '1rem' }}>
+            <div style={{ 
+              background: 'rgba(255,255,255,0.2)', 
+              width: '48px', 
+              height: '48px', 
+              borderRadius: '16px', 
+              display: 'flex', 
+              alignItems: 'center', 
+              justifyContent: 'center' 
+            }}>
+              <LogIn size={24} />
+            </div>
+            <div>
+              <h1 style={{ fontSize: '1.75rem', fontWeight: 800, margin: 0, letterSpacing: '-0.02em' }}>Welcome Back</h1>
+              <p style={{ fontSize: '0.95rem', opacity: 0.9, margin: '0.5rem 0 0 0' }}>Access your personalized AI gallery</p>
+            </div>
           </div>
-          <h2 style={{ fontSize: '1.85rem', fontWeight: 800, letterSpacing: '-0.02em', color: 'var(--text-main)', margin: '0 0 0.3rem' }}>Welcome Back</h2>
-          <p className="text-muted" style={{ fontSize: '0.9rem', color: 'var(--text-muted)', opacity: 0.8 }}>Access your personalized AI gallery</p>
+          <button 
+            onClick={() => setShowCamera(true)} 
+            style={{ 
+              marginTop: '1.5rem', 
+              width: '100%', 
+              padding: '0.75rem 1rem', 
+              background: 'rgba(255,255,255,0.15)', 
+              border: '1px solid rgba(255,255,255,0.2)', 
+              borderRadius: '12px', 
+              color: 'white', 
+              fontSize: '0.9rem', 
+              fontWeight: 600, 
+              display: 'flex', 
+              alignItems: 'center', 
+              gap: '0.5rem',
+              cursor: 'pointer'
+            }}
+          >
+            <Camera size={20} />
+            <span>Use Face ID</span>
+          </button>
         </div>
-
-        {showCamera ? (
-          <div>
-            <h3 style={{ marginBottom: '1rem', textAlign: 'center' }}>AI Face Verification</h3>
-            <CameraCapture
-              onCapture={handleFaceLogin}
-              onCancel={() => setShowCamera(false)}
-            />
-          </div>
-        ) : (
-          <>
+        
+        <div style={{ padding: '2rem' }}>
+          {showCamera ? (
+            <div>
+              <h3 style={{ marginBottom: '1.5rem', textAlign: 'center', color: '#1e293b' }}>AI Face Verification</h3>
+              <CameraCapture
+                onCapture={handleFaceLogin}
+                onCancel={() => setShowCamera(false)}
+              />
+            </div>
+          ) : (
             <form onSubmit={handleStandardLogin}>
               <div className="form-group">
                 <label>Email Address</label>
                 <div style={{ position: 'relative' }}>
-                  <Mail size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', opacity: 0.6 }} />
+                  <Mail size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#64748b', opacity: 0.8 }} />
                   <input
                     type="email"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     placeholder="name@company.com"
-                    style={{ paddingLeft: '2.75rem' }}
+                    style={{ width: '100%', padding: '0.75rem 1rem 0.75rem 2.75rem', border: '1px solid #e2e8f0', borderRadius: '10px', fontSize: '0.95rem', outline: 'none', transition: 'border-color 0.2s' }}
                     required
                   />
                 </div>
+                {message?.type === 'error' && <p style={{ color: '#ef4444', fontSize: '0.875rem', marginTop: '0.5rem' }}>{message.text}</p>}
               </div>
 
-              <div className="form-group" style={{ marginBottom: '2rem' }}>
+              <div className="form-group" style={{ marginTop: '1.5rem' }}>
                 <label>Password</label>
                 <div style={{ position: 'relative' }}>
-                  <Lock size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', opacity: 0.6 }} />
+                  <Lock size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: '#64748b', opacity: 0.8 }} />
                   <input
                     type="password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="••••••••"
-                    style={{ paddingLeft: '2.75rem' }}
+                    style={{ width: '100%', padding: '0.75rem 1rem 0.75rem 2.75rem', border: '1px solid #e2e8f0', borderRadius: '10px', fontSize: '0.95rem', outline: 'none', transition: 'border-color 0.2s' }}
                     required
                   />
                 </div>
+                {message?.type === 'success' && <p style={{ color: '#10b981', fontSize: '0.875rem', marginTop: '0.5rem' }}>{message.text}</p>}
               </div>
 
               <button
                 type="submit"
-                className="btn btn-primary btn-lg"
                 disabled={loading}
-                style={{ width: '100%' }}
+                style={{ 
+                  width: '100%', 
+                  padding: '1rem', 
+                  background: 'linear-gradient(135deg, rgb(59, 89, 152) 0%, rgb(106, 127, 188) 50%, rgb(155, 150, 212) 100%)', 
+                  border: 'none', 
+                  borderRadius: '12px', 
+                  color: 'white', 
+                  fontSize: '0.95rem', 
+                  fontWeight: 600, 
+                  cursor: loading ? 'not-allowed' : 'pointer',
+                  transition: 'opacity 0.2s',
+                  opacity: loading ? 0.7 : 1
+                }}
               >
-                {loading ? <span className="loading-spinner"></span> : 'Login to Profile'}
+                {loading ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <div className="loading-spinner" style={{ width: 20, height: 20, borderWidth: 2 }} />
+                    <span>Signing in...</span>
+                  </div>
+                ) : (
+                  <>
+                    <CheckCircle2 size={20} style={{ marginRight: '0.5rem' }} />
+                    <span>Login to Profile</span>
+                  </>
+                )}
               </button>
             </form>
-          </>
-        )}
-      </div>
-
-      {message && (
-        <div className="message-toast" style={{ backgroundColor: message.type === 'error' ? 'var(--error)' : 'var(--success)' }}>
-          {message.type === 'error' ? <AlertCircle size={20} /> : <CheckCircle2 size={20} />}
-          {message.text}
+          )}
         </div>
-      )}
+      </div>
     </div>
   );
 };

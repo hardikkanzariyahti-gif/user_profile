@@ -92,10 +92,10 @@ const Albums: React.FC<MyAlbumsProps> = ({ loggedInUser }) => {
         marginBottom: '2rem'
       }}>
         <div>
-          <h2 style={{ fontSize: '2rem', fontWeight: 800, letterSpacing: '-0.02em', margin: 0, color: '#0f172a' }}>
+          <h2 className="page-heading">
             Events / Albums
           </h2>
-          <p style={{ color: '#64748b', fontSize: '0.9rem', margin: '0.25rem 0 0' }}>
+          <p className="page-subtitle">
             Organize and navigate your memories, tours, and photo collections.
           </p>
         </div>
@@ -122,10 +122,9 @@ const Albums: React.FC<MyAlbumsProps> = ({ loggedInUser }) => {
 
           <button 
             onClick={() => setIsCreateModalOpen(true)}
-            className="btn btn-primary" 
-            style={{ height: '42px', borderRadius: '99px', fontSize: '0.9rem', display: 'inline-flex', alignItems: 'center', gap: '0.5rem', fontWeight: 800, padding: '0 1.5rem', cursor: 'pointer', border: 'none', background: '#6366f1', color: '#ffffff', boxShadow: '0 4px 12px rgba(99, 102, 241, 0.2)' }}
+            className="btn btn-primary"
           >
-            <Plus size={18} /> New Event
+            <Plus size={16} /> New Event
           </button>
         </div>
       </div>
@@ -134,8 +133,8 @@ const Albums: React.FC<MyAlbumsProps> = ({ loggedInUser }) => {
       {loading ? (
         <div style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
-          gap: '2rem',
+          gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))',
+          gap: '1.5rem',
         }}>
           {[1, 2, 3, 4].map(i => (
             <div key={i} style={{ opacity: 0.6 }}>
@@ -163,7 +162,7 @@ const Albums: React.FC<MyAlbumsProps> = ({ loggedInUser }) => {
              "Create your first event to organize trips, tours, and cherished memories."}
           </p>
           {!searchTerm && (
-            <button onClick={() => setIsCreateModalOpen(true)} className="btn btn-primary" style={{ height: '40px', padding: '0 1.25rem', borderRadius: '10px', fontWeight: 800, fontSize: '0.9rem', cursor: 'pointer', border: 'none', background: '#6366f1', color: 'white' }}>
+            <button onClick={() => setIsCreateModalOpen(true)} className="btn btn-primary">
               <Plus size={16} /> Create Event
             </button>
           )}
@@ -171,8 +170,8 @@ const Albums: React.FC<MyAlbumsProps> = ({ loggedInUser }) => {
       ) : (
         <div style={{
           display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
-          gap: '2rem 1.5rem',
+          gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))',
+          gap: '1.25rem',
         }}>
           <AnimatePresence>
             {processedAlbums.map((album, idx) => {
@@ -201,10 +200,10 @@ const Albums: React.FC<MyAlbumsProps> = ({ loggedInUser }) => {
                   transition={{ delay: idx * 0.03 }}
                   style={{
                     background: '#ffffff',
-                    borderRadius: '20px',
-                    border: '1px solid #e2e8f0',
+                    borderRadius: '16px',
+                    border: '1px solid var(--border-color)',
                     padding: '0.85rem',
-                    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.03)',
+                    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.06)',
                     position: 'relative',
                     overflow: 'hidden'
                   }}

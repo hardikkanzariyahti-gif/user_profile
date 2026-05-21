@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { MiniSearchBar } from '../components/MiniSearchBar';
 import { Image as ImageIcon, CheckCircle2, AlertCircle, Plus, Camera, X, ChevronLeft, ChevronRight, Album as AlbumIcon, CheckSquare, Square, Share2, Hash, RefreshCw, RotateCcw, ChevronDown, Trash2, Eye, Info, MapPin, Calendar, Users, Box, FileText, UserPlus, Sparkles } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -1158,6 +1159,24 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser, startBackgroundUpload }
     }
   };
 
+  const handleBulkDelete = async () => {
+    if (selectedIds.length === 0) return;
+    const confirmed = window.confirm(`Delete ${selectedIds.length} photo${selectedIds.length > 1 ? 's' : ''} permanently? This cannot be undone.`);
+    if (!confirmed) return;
+    setDeleting(true);
+    try {
+      await Promise.all(selectedIds.map(id => deleteGalleryItem(id)));
+      setImages(prev => prev.filter(i => !selectedIds.includes(Number(i.id))));
+      setSelectedIds([]);
+      setMessage({ type: 'success', text: `${selectedIds.length} photo${selectedIds.length > 1 ? 's' : ''} deleted.` });
+      setTimeout(() => setMessage(null), 3000);
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err.message || 'Failed to delete photos.' });
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   const handleUntagUser = async (user: UserProfile, img?: GalleryItem) => {
     const item = img || selectedImage;
     if (!item) return;
@@ -1427,10 +1446,24 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser, startBackgroundUpload }
         marginBottom: '3rem'
       }}>
         <div>
-          <h2 className="page-title" style={{ fontSize: '2.25rem', marginBottom: '0.3rem', fontWeight: 800, letterSpacing: '-0.02em', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-            {viewMode === 'personal' && loggedInUser ? 'Captured Moments' : 'Global Discovery'}
-          </h2>
-          <p className="text-muted" style={{ fontSize: '0.95rem', margin: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.75rem' }}>
+            <h2 className="page-title" style={{ fontSize: '2.25rem', marginBottom: '0.3rem', fontWeight: 800, letterSpacing: '-0.02em', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              {viewMode === 'personal' && loggedInUser ? 'Captured Moments' : 'Global Discovery'}
+            </h2>
+            <span className="photo-count-badge" style={{ 
+              display: 'inline-flex', 
+              alignItems: 'center', 
+              background: 'rgba(15, 23, 42, 0.04)', 
+              padding: '0.25rem 0.75rem', 
+              borderRadius: '12px', 
+              fontSize: '0.875rem', 
+              fontWeight: 500,
+              color: '#1e293b'
+            }}>
+              {images.length} photos
+            </span>
+          </div>
+          <p className="text-muted" style={{ fontSize: '0.95rem', margin: '0.5rem 0 0 0' }}>
             {viewMode === 'personal' && loggedInUser
               ? `Smart gallery showing photos matched to ${loggedInUser.name}.`
               : 'Explore all community photos and identified profiles.'}
@@ -1484,35 +1517,62 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser, startBackgroundUpload }
             </div>
           )}
 
-          <div className="flex gap-2" style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-            <button
-              onClick={() => {
-                const ok = window.confirm('Force Rescan is slower and re-detects faces. Continue?');
-                if (ok) handleRefreshRecognition(true);
-              }}
-              className="btn btn-outline"
-              disabled={refreshing}
-              style={{
-                height: '42px',
-                borderRadius: '99px',
-                padding: '0 1.25rem',
-                fontSize: '0.9rem',
-                fontWeight: 600,
-                background: 'rgba(245,158,11,0.05)',
-                color: '#b45309',
-                border: '1px solid rgba(245,158,11,0.25)',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '0.5rem',
-                cursor: 'pointer',
-                transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)'
-              }}
-              title="Clears caches and forces re-detection on all photos"
-            >
-              <RefreshCw size={15} style={{ animation: refreshing ? 'spin 1s linear infinite' : 'none' }} />
-              Force Rescan
-            </button>
-          </div>
+            <div className="flex gap-2" style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+              <MiniSearchBar />
+              <button
+                onClick={() => {
+                  if (selectedIds.length === images.length) {
+                    // Clear all selections
+                    setSelectedIds([]);
+                  } else {
+                    // Select all photos
+                    setSelectedIds(images.map(img => Number(img.id)));
+                  }
+                }}
+                disabled={images.length === 0}
+                style={{
+                  height: '32px',
+                  padding: '0 0.75rem',
+                  borderRadius: '8px',
+                  fontSize: '0.8rem',
+                  fontWeight: 500,
+                  border: selectedIds.length === images.length && images.length > 0 ? '1px solid #e2e8f0' : '1px solid #e2e8f0',
+                  background: selectedIds.length === images.length && images.length > 0 ? '#f1f4f9' : 'white',
+                  color: '#64748b',
+                  cursor: images.length === 0 ? 'not-allowed' : 'pointer',
+                  transition: 'all 0.15s ease'
+                }}
+              >
+                {selectedIds.length === images.length && images.length > 0 ? 'Clear All' : 'Select All'}
+              </button>
+              <button
+                onClick={() => {
+                  const ok = window.confirm('Force Rescan is slower and re-detects faces. Continue?');
+                  if (ok) handleRefreshRecognition(true);
+                }}
+                className="btn btn-outline"
+                disabled={refreshing}
+                style={{
+                  height: '42px',
+                  borderRadius: '99px',
+                  padding: '0 1.25rem',
+                  fontSize: '0.9rem',
+                  fontWeight: 600,
+                  background: 'rgba(245,158,11,0.05)',
+                  color: '#b45309',
+                  border: '1px solid rgba(245,158,11,0.25)',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)'
+                }}
+                title="Clears caches and forces re-detection on all photos"
+              >
+                <RefreshCw size={15} style={{ animation: refreshing ? 'spin 1s linear infinite' : 'none' }} />
+                Force Rescan
+              </button>
+            </div>
         </div>
       </div>
 
@@ -1601,23 +1661,47 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser, startBackgroundUpload }
                   padding: '0.75rem 0',
                   marginBottom: '1rem',
                   borderBottom: '1px solid rgba(0,0,0,0.05)'
-                }}>
-                  <h3 style={{
-                    fontSize: '1rem',
-                    fontWeight: 800,
-                    letterSpacing: '-0.01em',
-                    color: 'var(--text-main)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '10px',
-                    margin: 0
-                  }}>
-                    {group.title}
-                    <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)', background: 'rgba(15,23,42,0.05)', padding: '2px 8px', borderRadius: '6px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                      {group.items.length} items
-                    </span>
-                  </h3>
-                </div>
+                 }}>
+                   <div style={{ marginBottom: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                     <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem' }}>
+                       <h3 style={{ fontSize: '1rem', fontWeight: 800, letterSpacing: '-0.01em', color: 'var(--text-main)', margin: 0 }}>
+                         {group.title}
+                       </h3>
+                     </div>
+                     <button
+                       onClick={() => {
+                         const allSelected = group.items.every(img => selectedIds.includes(Number(img.id)));
+                         if (allSelected) {
+                           // Deselect all photos in this date group
+                           group.items.forEach(img => {
+                             setSelectedIds(prev => prev.filter(id => id !== Number(img.id)));
+                           });
+                         } else {
+                           // Select all photos in this date group
+                           group.items.forEach(img => {
+                             if (!selectedIds.includes(Number(img.id))) {
+                               setSelectedIds(prev => [...prev, Number(img.id)]);
+                             }
+                           });
+                         }
+                       }}
+                       disabled={group.items.length === 0}
+                       style={{
+                         height: '32px',
+                         padding: '0 0.75rem',
+                         borderRadius: '8px',
+                         fontSize: '0.8rem',
+                         fontWeight: 500,
+                         border: group.items.every(img => selectedIds.includes(Number(img.id))) ? '1px solid #e2e8f0' : '1px solid #e2e8f0',
+                         background: group.items.every(img => selectedIds.includes(Number(img.id))) ? '#f1f4f9' : 'white',
+                         color: group.items.every(img => selectedIds.includes(Number(img.id))) ? '#64748b' : '#64748b',
+                         cursor: group.items.length === 0 ? 'not-allowed' : 'pointer',
+                         transition: 'all 0.15s ease'
+                       }}
+                     >
+                       {group.items.every(img => selectedIds.includes(Number(img.id))) ? 'Selected' : 'Select'}
+                     </button>
+                   </div>
 
                 {/* 📌 The Core Dense Grid Layout */}
                 <div className="gallery-grid" style={{
@@ -1968,45 +2052,45 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser, startBackgroundUpload }
             }}
             onClick={handleClosePreview}
           >
-            <div style={{ position: 'fixed', top: '1.5rem', right: '2rem', zIndex: 2005, display: 'flex', gap: '0.75rem' }}>
-              {selectedImage && !selectedImage.isProfile && (
-                <div style={{ display: 'flex', gap: '0.75rem' }}>
-                  <button
-                    onClick={() => handleRescanItem(selectedImage)}
-                    disabled={refreshing}
-                    title="Rescan this photo (AI Re-detection)"
-                    style={{
-                      padding: '10px', borderRadius: '50%',
-                      background: refreshing ? '#e0e7ff' : '#ffffff',
-                      border: '1px solid #e2e8f0',
-                      color: '#6366f1', cursor: refreshing ? 'not-allowed' : 'pointer',
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.05)'
-                    }}
-                  >
-                    <RefreshCw size={20} style={{ animation: refreshing ? 'spin 1s linear infinite' : 'none' }} />
-                  </button>
-                  <button
-                    onClick={() => handleDeleteImage(selectedImage)}
-                    disabled={deleting}
-                    title="Delete this photo"
-                    style={{
-                      padding: '10px', borderRadius: '50%',
-                      background: deleting ? '#fee2e2' : '#ffffff',
-                      border: '1px solid #e2e8f0',
-                      color: '#ef4444', cursor: deleting ? 'not-allowed' : 'pointer',
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.05)'
-                    }}
-                  >
-                    {deleting ? <div className="loading-spinner" style={{ width: 20, height: 20, borderWidth: 2 }} /> : <Trash2 size={20} />}
-                  </button>
-                </div>
-              )}
-              <button onClick={handleClosePreview} className="btn" style={{ padding: '10px', borderRadius: '50%', background: '#ffffff', border: '1px solid #e2e8f0', color: '#64748b', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.05)' }}>
-                <X size={20} />
-              </button>
-            </div>
+             <div style={{ position: 'fixed', bottom: '2rem', right: '2rem', zIndex: 2005, display: 'flex', gap: '0.75rem' }}>
+               {selectedImage && !selectedImage.isProfile && (
+                 <div style={{ display: 'flex', gap: '0.75rem' }}>
+                   <button
+                     onClick={() => handleRescanItem(selectedImage)}
+                     disabled={refreshing}
+                     title="Rescan this photo (AI Re-detection)"
+                     style={{
+                       padding: '10px', borderRadius: '50%',
+                       background: refreshing ? '#e0e7ff' : '#ffffff',
+                       border: '1px solid #e2e8f0',
+                       color: '#6366f1', cursor: refreshing ? 'not-allowed' : 'pointer',
+                       display: 'flex', alignItems: 'center', justifyContent: 'center',
+                       boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.05)'
+                     }}
+                   >
+                     <RefreshCw size={20} style={{ animation: refreshing ? 'spin 1s linear infinite' : 'none' }} />
+                   </button>
+                   <button
+                     onClick={() => handleDeleteImage(selectedImage)}
+                     disabled={deleting}
+                     title="Delete this photo"
+                     style={{
+                       padding: '10px', borderRadius: '50%',
+                       background: deleting ? '#fee2e2' : '#ffffff',
+                       border: '1px solid #e2e8f0',
+                       color: '#ef4444', cursor: deleting ? 'not-allowed' : 'pointer',
+                       display: 'flex', alignItems: 'center', justifyContent: 'center',
+                       boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.05)'
+                     }}
+                   >
+                     {deleting ? <div className="loading-spinner" style={{ width: 20, height: 20, borderWidth: 2 }} /> : <Trash2 size={20} />}
+                   </button>
+                 </div>
+               )}
+               <button onClick={handleClosePreview} className="btn" style={{ padding: '10px', borderRadius: '50%', background: '#ffffff', border: '1px solid #e2e8f0', color: '#64748b', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.05)' }}>
+                 <Eye size={20} />
+               </button>
+             </div>
 
             {/* Navigation Arrows */}
             <div style={{ position: 'fixed', left: '2rem', top: '50%', transform: 'translateY(-50%)', zIndex: 2005 }}>
@@ -2558,17 +2642,10 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser, startBackgroundUpload }
                 <AlbumIcon size={18} /> Create Album
               </button>
               <button
-                onClick={handleOpenTagModal}
-                className="btn btn-primary"
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.5rem',
-                  background: 'rgba(16, 185, 129, 0.95)',
-                  border: 'none'
-                }}
+                onClick={handleCancelProcessing}
+                className="btn btn-danger"
               >
-                <UserPlus size={18} /> Tag Selected
+                <X size={14} /> Cancel
               </button>
             </div>
           </motion.div>
@@ -3298,15 +3375,18 @@ const Gallery: React.FC<GalleryProps> = ({ loggedInUser, startBackgroundUpload }
 
                   {/* Cancel and Upload Buttons */}
                   <div style={{ display: 'flex', gap: '1rem', marginTop: '0.5rem' }}>
-                    <button
-                      onClick={() => setShowUploadModal(false)}
-                      style={{
-                        flex: 1, padding: '0.85rem', borderRadius: '12px', border: '1px solid #cbd5e1',
-                        background: '#ffffff', color: '#0f172a', fontWeight: 600, cursor: 'pointer'
-                      }}
-                    >
-                      Cancel
-                    </button>
+              <button
+                onClick={() => setSelectedIds([])}
+                className="btn btn-outline"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleBulkDelete}
+                className="btn btn-danger"
+              >
+                <Trash2 size={14} /> Delete
+              </button>
                     <button
                       onClick={executeBulkUpload}
                       disabled={uploadFiles.length === 0}
